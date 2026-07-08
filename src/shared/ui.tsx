@@ -5,7 +5,7 @@ export function Logo({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-2">
       <div className="grid h-9 w-9 place-items-center rounded-lg border border-zgreen/40 bg-zsurface p-1.5 shadow-glow">
-        <img src="/icons/zverts-focus.svg" alt="ZverTs" className="h-full w-full object-contain" />
+        <img src="/icons/zverts-focus.png" alt="ZverTs" className="h-full w-full object-contain" />
       </div>
       {!compact && (
         <div>
