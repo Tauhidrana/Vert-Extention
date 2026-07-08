@@ -96,7 +96,7 @@ function Popup() {
   const remaining = useMemo(() => (state ? formatRemaining(state.session.endsAt, state.session.active) : "25:00"), [state, state?.session.endsAt]);
   const progress = state ? timerProgress(state.session) : 0;
 
-  if (!state) return <div className="grid h-[560px] w-[390px] place-items-center text-sm text-white/70">Loading ZverTs Focus...</div>;
+  if (!state) return <div className="grid h-[560px] w-[390px] place-items-center text-sm text-white/70">Loading VerT Focus...</div>;
 
   const { session, policy, learningContext } = state;
   const hasActiveSession = learningContext.active && Boolean(learningContext.sessionId || learningContext.currentCourseName);

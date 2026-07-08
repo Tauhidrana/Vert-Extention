@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "ZverTs Focus",
-  "short_name": "ZverTs Focus",
+  "name": "VerT Focus",
+  "short_name": "VerT Focus",
   "version": "1.0.0",
   "description": "AI-powered distraction blocker and learning protection for ZverTs students.",
   "action": {
-    "default_title": "ZverTs Focus",
+    "default_title": "VerT Focus",
     "default_popup": "src/popup/index.html"
   },
   "options_page": "src/options/index.html",

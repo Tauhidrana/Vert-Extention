@@ -9,7 +9,7 @@ export function Logo({ compact = false }: { compact?: boolean }) {
       </div>
       {!compact && (
         <div>
-          <div className="text-sm font-black tracking-normal text-zwhite">ZverTs Focus</div>
+          <div className="text-sm font-black tracking-normal text-zwhite">VerT Focus</div>
           <div className="text-[11px] font-medium text-zgreen">Learning protection</div>
         </div>
       )}

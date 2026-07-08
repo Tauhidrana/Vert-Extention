@@ -1,4 +1,4 @@
-# ZverTs Focus
+# VerT Focus
 
 Production-ready Chrome Extension (Manifest V3) for ZverTs focus protection.
 
@@ -119,4 +119,4 @@ Load the generated `dist` folder in Chrome at `chrome://extensions` with Develop
 
 ## Chrome Limitations
 
-Chrome extensions cannot prevent uninstalling or disabling. ZverTs Focus records interruptions, warns the student, and can notify the backend when technically possible.
+Chrome extensions cannot prevent uninstalling or disabling. VerT Focus records interruptions, warns the student, and can notify the backend when technically possible.
