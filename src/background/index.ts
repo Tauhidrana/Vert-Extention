@@ -115,7 +115,6 @@ async function maybeBlockNavigation(tabId: number, url?: string) {
       await redirectBlockedTab(tabId, url);
     }
   } catch {
-    // Ignore URLs Chrome exposes that are not valid HTTP(S) URLs.
   }
 }
 

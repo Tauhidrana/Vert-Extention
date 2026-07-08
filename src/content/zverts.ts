@@ -275,7 +275,6 @@ async function detectMultipleMonitors() {
       reportQuizViolation("multi_monitor", { screens: details.screens?.length });
     }
   } catch {
-    // Browser support and permissions vary; failure means no signal is available.
   }
 }
 
