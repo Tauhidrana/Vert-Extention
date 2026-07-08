@@ -1,8 +1,8 @@
 import "../styles/global.css";
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bell, BookOpen, CircleSlash, Clock3, LockKeyhole, Settings, Shield, ShieldCheck, Wifi } from "lucide-react";
-import { Card, GhostButton, Logo, ProgressBar, Stat } from "../shared/ui";
+import { Bell, BookOpen, CircleSlash, Clock3, Settings, Shield, ShieldCheck, Sparkles, Wifi } from "lucide-react";
+import { Card, Logo, ProgressBar, Stat } from "../shared/ui";
 import type { FocusEvent, FocusPolicy, FocusSession, LearningContext, UserSettings } from "../shared/types";
 
 interface State {
@@ -26,6 +26,13 @@ function timerProgress(session: FocusSession) {
   const total = session.endsAt - session.startedAt;
   const elapsed = Date.now() - session.startedAt;
   return Math.max(0, Math.min(1, elapsed / total));
+}
+
+function formatMinutes(minutes?: number) {
+  if (minutes === undefined) return "0m";
+  const hours = Math.floor(minutes / 60);
+  const rest = Math.round(minutes % 60);
+  return hours ? `${hours}h ${rest}m` : `${rest}m`;
 }
 
 function StatusBadge({ label, on }: { label: string; on: boolean }) {
@@ -74,8 +81,16 @@ function Popup() {
   const load = () => chrome.runtime.sendMessage({ type: "GET_STATE" }).then((response) => setState(response.state));
   useEffect(() => {
     load();
+    chrome.runtime.sendMessage({ type: "REQUEST_LEARNING_SESSION_SYNC" });
     const timer = window.setInterval(() => tick((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
+    const storageListener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+      if (areaName === "local" && (changes.learningContext || changes.focusSession)) load();
+    };
+    chrome.storage.onChanged.addListener(storageListener);
+    return () => {
+      window.clearInterval(timer);
+      chrome.storage.onChanged.removeListener(storageListener);
+    };
   }, []);
 
   const remaining = useMemo(() => (state ? formatRemaining(state.session.endsAt, state.session.active) : "25:00"), [state, state?.session.endsAt]);
@@ -84,7 +99,7 @@ function Popup() {
   if (!state) return <div className="grid h-[560px] w-[390px] place-items-center text-sm text-white/70">Loading ZverTs Focus...</div>;
 
   const { session, policy, learningContext } = state;
-  const hasCourse = Boolean(learningContext.currentCourse || learningContext.currentModule || learningContext.updatedAt);
+  const hasActiveSession = learningContext.active && Boolean(learningContext.sessionId || learningContext.currentCourseName);
 
   return (
     <main className="w-[390px] p-4">
@@ -140,18 +155,38 @@ function Popup() {
           <BookOpen size={18} className="text-zgreen" />
           <div className="text-sm font-black">Current Course</div>
         </div>
-        {hasCourse ? (
+        {hasActiveSession ? (
           <>
-            <div className="text-sm font-bold text-white">{learningContext.currentCourse ?? "ZverTs Course"}</div>
-            <div className="mt-1 text-xs text-white/55">
-              {learningContext.currentModule ??
-                (learningContext.moduleIndex && learningContext.moduleTotal ? `Module ${learningContext.moduleIndex} / ${learningContext.moduleTotal}` : "Module in progress")}
+            <div className="flex gap-3">
+              {learningContext.courseThumbnail && (
+                <img
+                  src={learningContext.courseThumbnail}
+                  alt=""
+                  className="h-14 w-20 rounded-lg border border-white/10 object-cover"
+                />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-bold text-white">{learningContext.currentCourseName}</div>
+                <div className="mt-1 truncate text-xs text-white/55">{learningContext.currentModuleName}</div>
+                <div className="mt-1 truncate text-xs text-white/55">
+                  Lesson {learningContext.currentLessonNumber ?? ""} {learningContext.currentLessonName ? `- ${learningContext.currentLessonName}` : ""}
+                </div>
+              </div>
             </div>
             <div className="mt-3"><ProgressBar value={learningContext.completionPercent} /></div>
-            <div className="mt-2 text-right text-xs font-bold text-zgreen">{Math.round(learningContext.completionPercent)}%</div>
+            <div className="mt-2 flex items-center justify-between text-xs">
+              <span className="font-semibold text-white/55">
+                {(learningContext.lessonsCompleted ?? 0)} / {(learningContext.totalLessons ?? 0)} Lessons
+              </span>
+              <span className="font-bold text-zgreen">{Math.round(learningContext.completionPercent)}%</span>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Stat label="Watch Time" value={formatMinutes(learningContext.watchTimeMinutes)} />
+              <Stat label="Remaining" value={formatMinutes(learningContext.remainingTimeMinutes)} />
+            </div>
           </>
         ) : (
-          <p className="m-0 text-sm leading-6 text-white/55">Waiting for course data from ZverTs.</p>
+          <p className="m-0 text-sm leading-6 text-white/55">No active learning session. Start a course on ZverTs to begin Focus Mode.</p>
         )}
       </Card>
 
@@ -161,8 +196,24 @@ function Popup() {
           <div className="text-sm font-black">Today's Learning</div>
         </div>
         <div className="rounded-lg border border-zgreen/25 bg-zgreen/10 px-3 py-3 text-sm font-bold text-white">
-          {learningContext.currentTask ?? "Waiting for ZverTs task"}
+          {hasActiveSession ? learningContext.currentTask ?? "Learning" : "No active learning session"}
         </div>
+        {hasActiveSession && (
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <Stat label="XP" value={learningContext.xp ?? 0} />
+            <Stat label="Gems" value={learningContext.gems ?? 0} />
+            <Stat label="Streak" value={learningContext.streak ?? 0} />
+          </div>
+        )}
+        {hasActiveSession && learningContext.dailyMissionProgress !== undefined && (
+          <div className="mt-3">
+            <div className="mb-2 flex items-center justify-between text-xs text-white/55">
+              <span className="inline-flex items-center gap-1"><Sparkles size={13} /> Daily Mission</span>
+              <span className="font-bold text-zgreen">{Math.round(learningContext.dailyMissionProgress)}%</span>
+            </div>
+            <ProgressBar value={learningContext.dailyMissionProgress} />
+          </div>
+        )}
       </Card>
 
       <div className="grid grid-cols-2 gap-2">

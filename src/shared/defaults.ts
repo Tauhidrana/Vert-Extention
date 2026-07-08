@@ -47,6 +47,7 @@ export const EMPTY_SESSION: FocusSession = {
 };
 
 export const DEFAULT_LEARNING_CONTEXT: LearningContext = {
+  active: false,
   completionPercent: 0
 };
 

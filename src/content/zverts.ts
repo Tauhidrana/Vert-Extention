@@ -1,4 +1,4 @@
-import type { RuntimeMessage } from "../shared/types";
+import type { LearningContext, RuntimeMessage } from "../shared/types";
 
 const send = <T extends RuntimeMessage>(message: T) => chrome.runtime.sendMessage(message).catch(() => undefined);
 
@@ -34,30 +34,9 @@ function isLearningPage() {
   return ["/learn", "/course", "/lesson", "/watch", "/module", "/quiz"].some((part) => path.includes(part));
 }
 
-function detectMetadata() {
-  const course =
-    document.querySelector<HTMLMetaElement>('meta[name="zverts:course"]')?.content ||
-    document.querySelector<HTMLElement>("[data-zverts-course]")?.dataset.zvertsCourse ||
-    undefined;
-  const currentModule =
-    document.querySelector<HTMLMetaElement>('meta[name="zverts:module"]')?.content ||
-    document.querySelector<HTMLElement>("[data-zverts-module]")?.dataset.zvertsModule ||
-    undefined;
-  const completionPercent = Number(
-    document.querySelector<HTMLMetaElement>('meta[name="zverts:completion"]')?.content ||
-      document.querySelector<HTMLElement>("[data-zverts-completion]")?.dataset.zvertsCompletion ||
-      0
-  );
-
-  return { currentCourse: course, currentModule, completionPercent };
-}
-
 function startFocusIfNeeded() {
   send({ type: "START_FOCUS", sourceUrl: location.href });
-  if (isLearningPage()) {
-    const context = detectMetadata();
-    send({ type: "LEARNING_CONTEXT", context });
-  }
+  requestActiveLearningSession();
 }
 
 function protectExternalLinks() {
@@ -172,8 +151,13 @@ function monitorFocus() {
 function listenForZvertsAppEvents() {
   window.addEventListener("message", (event) => {
     if (event.origin !== location.origin) return;
-    if (event.data?.type === "ZVERTS_PROGRESS_UPDATE" || event.data?.type === "ZVERTS_LEARNING_CONTEXT") {
-      send({ type: "LEARNING_CONTEXT", context: event.data.context ?? event.data.progress ?? {} });
+    if (
+      event.data?.type === "ZVERTS_PROGRESS_UPDATE" ||
+      event.data?.type === "ZVERTS_LEARNING_CONTEXT" ||
+      event.data?.type === "ZVERTS_ACTIVE_LEARNING_SESSION"
+    ) {
+      const context = normalizeLearningSession(event.data.context ?? event.data.session ?? event.data.progress ?? {});
+      send({ type: "LEARNING_CONTEXT", context });
     }
     if (event.data?.type === "ZVERTS_NOTIFICATION") {
       send({ type: "NOTIFY", title: event.data.title, message: event.data.message });
@@ -184,10 +168,129 @@ function listenForZvertsAppEvents() {
   });
 }
 
+function numberOrUndefined(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function minutesFromDuration(value: unknown) {
+  if (typeof value === "number") return Math.round(value);
+  if (typeof value !== "string") return undefined;
+  const parts = value.split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return undefined;
+  if (parts.length === 3) return parts[0] * 60 + parts[1] + Math.round(parts[2] / 60);
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return numberOrUndefined(value);
+}
+
+function normalizeLearningSession(rawInput: unknown): Partial<LearningContext> {
+  if (!rawInput || typeof rawInput !== "object") {
+    return { active: false, completionPercent: 0 };
+  }
+
+  const raw = rawInput as Record<string, unknown>;
+  const session = (raw.session ?? raw.activeSession ?? raw.learningSession ?? raw) as Record<string, unknown>;
+  const course = (session.course ?? raw.course ?? {}) as Record<string, unknown>;
+  const module = (session.module ?? session.currentModule ?? raw.module ?? {}) as Record<string, unknown>;
+  const lesson = (session.lesson ?? session.currentLesson ?? raw.lesson ?? {}) as Record<string, unknown>;
+  const progress = (session.progress ?? raw.progress ?? {}) as Record<string, unknown>;
+  const mission = (session.dailyMission ?? raw.dailyMission ?? raw.mission ?? {}) as Record<string, unknown>;
+  const user = (session.userStats ?? raw.userStats ?? raw.user ?? {}) as Record<string, unknown>;
+  const sessionId = String(session.id ?? session.sessionId ?? raw.sessionId ?? "");
+
+  if (!sessionId && !session.courseId && !course.name && !lesson.name) {
+    return { active: false, completionPercent: 0 };
+  }
+
+  return {
+    active: true,
+    sessionId: sessionId || undefined,
+    currentCourseName: String(course.name ?? session.courseName ?? raw.currentCourseName ?? ""),
+    currentModuleName: String(module.name ?? session.moduleName ?? raw.currentModuleName ?? ""),
+    currentLessonName: String(lesson.name ?? session.lessonName ?? raw.currentLessonName ?? ""),
+    currentLessonNumber: numberOrUndefined(lesson.number ?? session.lessonNumber ?? raw.currentLessonNumber),
+    courseThumbnail: String(course.thumbnail ?? course.thumbnailUrl ?? session.courseThumbnail ?? raw.courseThumbnail ?? ""),
+    currentTask: (session.currentTask ?? raw.currentTask) as LearningContext["currentTask"],
+    completionPercent: numberOrUndefined(progress.completionPercent ?? session.completionPercent ?? raw.completionPercent) ?? 0,
+    lessonsCompleted: numberOrUndefined(progress.lessonsCompleted ?? session.lessonsCompleted ?? raw.lessonsCompleted),
+    totalLessons: numberOrUndefined(progress.totalLessons ?? session.totalLessons ?? raw.totalLessons),
+    watchTimeMinutes: minutesFromDuration(progress.watchTime ?? session.watchTime ?? raw.watchTime ?? session.watchTimeMinutes),
+    remainingTimeMinutes: minutesFromDuration(progress.remainingTime ?? session.remainingTime ?? raw.remainingTime ?? session.remainingTimeMinutes),
+    dailyMissionProgress: numberOrUndefined(mission.progress ?? session.dailyMissionProgress ?? raw.dailyMissionProgress),
+    xp: numberOrUndefined(user.xp ?? session.xp ?? raw.xp),
+    gems: numberOrUndefined(user.gems ?? session.gems ?? raw.gems),
+    streak: numberOrUndefined(user.streak ?? session.streak ?? raw.streak)
+  };
+}
+
+async function fetchActiveLearningSession() {
+  const endpoints = [
+    "/api/learning/session/active",
+    "/api/learning-sessions/active",
+    "/api/learning/active-session",
+    "/api/focus/session",
+    "/api/me/learning-session"
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(new URL(endpoint, location.origin), {
+        credentials: "include",
+        headers: { accept: "application/json" }
+      });
+      if (response.status === 401 || response.status === 403) return { active: false, completionPercent: 0 };
+      if (!response.ok) continue;
+      const data = (await response.json()) as Record<string, unknown>;
+      return normalizeLearningSession(data);
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+let syncTimer: number | undefined;
+
+async function requestActiveLearningSession() {
+  window.postMessage({ type: "ZVERTS_FOCUS_EXTENSION_READY" }, location.origin);
+  window.postMessage({ type: "ZVERTS_FOCUS_REQUEST_SESSION" }, location.origin);
+  window.dispatchEvent(new CustomEvent("zverts-focus:request-session"));
+
+  const context = await fetchActiveLearningSession();
+  if (context) send({ type: "LEARNING_CONTEXT", context });
+}
+
+function scheduleSessionSync() {
+  window.clearTimeout(syncTimer);
+  syncTimer = window.setTimeout(requestActiveLearningSession, 350);
+}
+
 installQuizShield();
 protectExternalLinks();
 monitorFocus();
 listenForZvertsAppEvents();
+
+chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
+  if (message.type === "REQUEST_LEARNING_SESSION_SYNC") {
+    requestActiveLearningSession();
+  }
+});
+
+window.addEventListener("focus", scheduleSessionSync);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) scheduleSessionSync();
+});
+
+const pushState = history.pushState;
+history.pushState = function patchedPushState(...args) {
+  const result = pushState.apply(this, args);
+  scheduleSessionSync();
+  return result;
+};
+window.addEventListener("popstate", scheduleSessionSync);
+new MutationObserver(scheduleSessionSync).observe(document.documentElement, { childList: true, subtree: true });
+window.setInterval(requestActiveLearningSession, 10_000);
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {

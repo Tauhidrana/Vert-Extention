@@ -1,4 +1,4 @@
-import { DEFAULT_POLICY, EMPTY_SESSION } from "../shared/defaults";
+import { DEFAULT_LEARNING_CONTEXT, DEFAULT_POLICY, EMPTY_SESSION } from "../shared/defaults";
 import { postSecureEvent } from "../shared/supabase";
 import { storage } from "../shared/storage";
 import type { FocusEvent, FocusPolicy, FocusSession, RuntimeMessage } from "../shared/types";
@@ -19,6 +19,7 @@ async function logEvent(event: Omit<FocusEvent, "id" | "at"> & { at?: number }) 
 
 async function getState() {
   await syncFocusWithZvertsTabs();
+  await requestActiveSessionFromZvertsTab();
   const [session, policy, learningContext, settings, events] = await Promise.all([
     storage.getSession(),
     storage.getPolicy(),
@@ -76,6 +77,9 @@ async function endFocus(reason = "manual") {
   await setAdRulesEnabled(false);
   await chrome.alarms.clear(TIMER_ALARM);
   await chrome.alarms.clear(REMINDER_ALARM);
+  if (reason === "zverts_tab_closed" || reason === "auto_start_disabled") {
+    await storage.setLearningContext(DEFAULT_LEARNING_CONTEXT);
+  }
   await logEvent({
     type: reason === "unexpected" ? "unexpected_end" : "focus_ended",
     url: previous.sourceUrl,
@@ -188,9 +192,11 @@ async function syncFocusWithZvertsTabs() {
     if (!session.active || session.endsAt <= Date.now()) {
       await logEvent({ type: "zverts_detected", url: zvertsTab.url });
       await startFocus({ sourceUrl: zvertsTab.url, zvertsTabId: zvertsTab.id });
+      await requestActiveSessionFromZvertsTab(zvertsTab.id);
     } else if (session.zvertsTabId !== zvertsTab.id || session.sourceUrl !== zvertsTab.url) {
       await storage.setSession({ ...session, sourceUrl: zvertsTab.url, zvertsTabId: zvertsTab.id });
       await setAdRulesEnabled(true);
+      await requestActiveSessionFromZvertsTab(zvertsTab.id);
     }
     return;
   }
@@ -201,6 +207,12 @@ async function syncFocusWithZvertsTabs() {
   } else {
     await setAdRulesEnabled(false);
   }
+}
+
+async function requestActiveSessionFromZvertsTab(tabId?: number) {
+  const targetTabId = tabId ?? (await findZvertsTab())?.id;
+  if (!targetTabId) return;
+  await chrome.tabs.sendMessage(targetTabId, { type: "REQUEST_LEARNING_SESSION_SYNC" }).catch(() => undefined);
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -234,6 +246,10 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
       case "GET_STATE":
         sendResponse({ ok: true, state: await getState() });
         break;
+      case "REQUEST_LEARNING_SESSION_SYNC":
+        await requestActiveSessionFromZvertsTab(sender.tab?.id);
+        sendResponse({ ok: true });
+        break;
       case "OPEN_FOCUS_PAGE":
         if (sender.tab?.id) await redirectBlockedTab(sender.tab.id, message.url ?? sender.tab.url ?? "", "external_escape");
         sendResponse({ ok: true });
@@ -246,7 +262,10 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
         break;
       case "LEARNING_CONTEXT": {
         const context = await storage.getLearningContext();
-        await storage.setLearningContext({ ...context, ...message.context, updatedAt: Date.now() });
+        const nextContext = message.context.active === false
+          ? { ...DEFAULT_LEARNING_CONTEXT, updatedAt: Date.now() }
+          : { ...context, ...message.context, active: true, updatedAt: Date.now() };
+        await storage.setLearningContext(nextContext);
         sendResponse({ ok: true });
         break;
       }

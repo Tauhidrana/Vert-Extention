@@ -11,23 +11,62 @@ Production-ready Chrome Extension (Manifest V3) for ZverTs focus protection.
 - Full-screen premium Focus page with a Return to ZverTs action.
 - Persistent focus timer with Chrome alarms.
 - Popup protection panel for remaining time, protected websites, blocked requests, focus duration, prevented distractions, live status, and ZverTs-provided course/task data.
-- ZverTs content bridge for progress, notifications, quiz rules, and admin policy updates.
+- ZverTs content bridge for active learning sessions, progress, notifications, quiz rules, and admin policy updates.
 - Quiz Mode protections for right click, copy, paste, drag, selection, print/save shortcuts, fullscreen exits, and tab switches where Chrome allows detection.
 - YouTube Learning Mode when opened from ZverTs, hiding recommendations, comments, Shorts, feeds, and ad surfaces.
 - Options UI for allowed sites, focus duration, notifications, sound, auto-start, Supabase URL, and JWT.
 
 ## ZverTs Site Integration
 
-The extension listens for these page messages from `https://www.zverts.com`:
+The website is the source of truth. The extension does not hardcode course data. When a ZverTs tab is active, the content script:
+
+- requests the current session with `window.postMessage({ type: "ZVERTS_FOCUS_REQUEST_SESSION" }, location.origin)`
+- dispatches `zverts-focus:request-session`
+- fetches authenticated same-origin session endpoints with `credentials: "include"`
+- listens for realtime session updates from the website
+
+Supported same-origin API endpoints:
+
+- `GET /api/learning/session/active`
+- `GET /api/learning-sessions/active`
+- `GET /api/learning/active-session`
+- `GET /api/focus/session`
+- `GET /api/me/learning-session`
+
+The website should answer requests and push realtime updates with:
 
 ```ts
 window.postMessage({
-  type: "ZVERTS_LEARNING_CONTEXT",
-  context: {
-    currentCourse: "Higher Mathematics",
-    currentModule: "Module 8 / 21",
+  type: "ZVERTS_ACTIVE_LEARNING_SESSION",
+  session: {
+    id: "session_123",
+    course: {
+      name: "Higher Math",
+      thumbnail: "https://www.zverts.com/course.jpg"
+    },
+    module: {
+      name: "Module 5"
+    },
+    lesson: {
+      name: "Functions",
+      number: 21
+    },
+    progress: {
+      completionPercent: 63,
+      lessonsCompleted: 21,
+      totalLessons: 34,
+      watchTime: "7:48",
+      remainingTime: "2:15"
+    },
     currentTask: "Watch Module",
-    completionPercent: 67
+    dailyMission: {
+      progress: 80
+    },
+    userStats: {
+      xp: 1200,
+      gems: 40,
+      streak: 6
+    }
   }
 }, location.origin);
 window.postMessage({ type: "ZVERTS_NOTIFICATION", title: "Lesson Ready", message: "Continue your current module." }, location.origin);
@@ -35,15 +74,14 @@ window.postMessage({ type: "ZVERTS_FOCUS_POLICY", policy: { quizWarningLimit: 2 
 window.postMessage({ type: "ZVERTS_QUIZ_START", config: { quizAction: "lock" } }, location.origin);
 ```
 
-The page can also expose metadata with:
+If no session is active, send:
 
-```html
-<meta name="zverts:course" content="Course name" />
-<meta name="zverts:module" content="Module 8 / 21" />
-<meta name="zverts:completion" content="67" />
+```ts
+window.postMessage({
+  type: "ZVERTS_ACTIVE_LEARNING_SESSION",
+  session: null
+}, location.origin);
 ```
-
-or `data-zverts-course`, `data-zverts-module`, `data-zverts-completion`, and `data-zverts-quiz` attributes.
 
 ## Supabase
 

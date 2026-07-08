@@ -32,12 +32,23 @@ export interface FocusSession {
 }
 
 export interface LearningContext {
-  currentCourse?: string;
-  currentModule?: string;
+  active: boolean;
+  sessionId?: string;
+  currentCourseName?: string;
+  currentModuleName?: string;
+  currentLessonName?: string;
+  currentLessonNumber?: number;
+  courseThumbnail?: string;
   currentTask?: "Watch Module" | "Quiz" | "Revision" | "Learning";
   completionPercent: number;
-  moduleIndex?: number;
-  moduleTotal?: number;
+  lessonsCompleted?: number;
+  totalLessons?: number;
+  watchTimeMinutes?: number;
+  remainingTimeMinutes?: number;
+  dailyMissionProgress?: number;
+  xp?: number;
+  gems?: number;
+  streak?: number;
   updatedAt?: number;
 }
 
@@ -81,6 +92,7 @@ export type RuntimeMessage =
   | { type: "QUIZ_STARTED"; config?: Partial<FocusPolicy> }
   | { type: "QUIZ_EVENT"; event: "switch" | "blur" | "hidden" | "fullscreen_exit" | "focus"; url?: string }
   | { type: "LEARNING_CONTEXT"; context: Partial<LearningContext> }
+  | { type: "REQUEST_LEARNING_SESSION_SYNC" }
   | { type: "NOTIFY"; title: string; message: string }
   | { type: "SAVE_SETTINGS"; settings: Partial<UserSettings> }
   | { type: "ADMIN_POLICY"; policy: Partial<FocusPolicy> };
