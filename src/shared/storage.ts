@@ -1,10 +1,10 @@
-import { DEFAULT_POLICY, DEFAULT_PROGRESS, DEFAULT_SETTINGS, EMPTY_SESSION } from "./defaults";
-import type { FocusEvent, FocusPolicy, FocusSession, UserProgress, UserSettings } from "./types";
+import { DEFAULT_LEARNING_CONTEXT, DEFAULT_POLICY, DEFAULT_SETTINGS, EMPTY_SESSION } from "./defaults";
+import type { FocusEvent, FocusPolicy, FocusSession, LearningContext, UserSettings } from "./types";
 
 const keys = {
   session: "focusSession",
   policy: "focusPolicy",
-  progress: "userProgress",
+  learningContext: "learningContext",
   settings: "userSettings",
   events: "focusEvents"
 } as const;
@@ -17,8 +17,8 @@ export const storage = {
   setSession: (session: FocusSession) => chrome.storage.local.set({ [keys.session]: session }),
   getPolicy: () => get<FocusPolicy>(keys.policy, DEFAULT_POLICY),
   setPolicy: (policy: FocusPolicy) => chrome.storage.local.set({ [keys.policy]: policy }),
-  getProgress: () => get<UserProgress>(keys.progress, DEFAULT_PROGRESS),
-  setProgress: (progress: UserProgress) => chrome.storage.local.set({ [keys.progress]: progress }),
+  getLearningContext: () => get<LearningContext>(keys.learningContext, DEFAULT_LEARNING_CONTEXT),
+  setLearningContext: (context: LearningContext) => chrome.storage.local.set({ [keys.learningContext]: context }),
   getSettings: () => get<UserSettings>(keys.settings, DEFAULT_SETTINGS),
   setSettings: (settings: UserSettings) => chrome.storage.local.set({ [keys.settings]: settings }),
   async getEvents(): Promise<FocusEvent[]> {

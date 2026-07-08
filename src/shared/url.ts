@@ -21,6 +21,14 @@ export const isBlockedByPolicy = (url: string, blockedSites: string[], whitelist
     return false;
   }
 
+  const isYoutube = hostname === "youtube.com" || hostname.endsWith(".youtube.com");
+  if (isYoutube) {
+    const path = parsed.pathname.toLowerCase();
+    const blocksYoutubeHome = blockedSites.includes("youtube.com");
+    const blocksYoutubePath = blockedSites.some((site) => full === site || full.startsWith(`${site}/`));
+    return blocksYoutubePath || (blocksYoutubeHome && (path === "/" || path === "" || path.startsWith("/feed") || path.startsWith("/shorts")));
+  }
+
   return blockedSites.some((site) => {
     const clean = site.replace(/^https?:\/\//, "").replace(/^www\./, "");
     return full === clean || full.startsWith(`${clean}/`) || hostname === clean || hostname.endsWith(`.${clean}`);

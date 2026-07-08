@@ -39,18 +39,25 @@ function detectMetadata() {
     document.querySelector<HTMLMetaElement>('meta[name="zverts:course"]')?.content ||
     document.querySelector<HTMLElement>("[data-zverts-course]")?.dataset.zvertsCourse ||
     undefined;
-  const lesson =
-    document.querySelector<HTMLMetaElement>('meta[name="zverts:lesson"]')?.content ||
-    document.querySelector<HTMLElement>("[data-zverts-lesson]")?.dataset.zvertsLesson ||
-    document.title;
+  const currentModule =
+    document.querySelector<HTMLMetaElement>('meta[name="zverts:module"]')?.content ||
+    document.querySelector<HTMLElement>("[data-zverts-module]")?.dataset.zvertsModule ||
+    undefined;
+  const completionPercent = Number(
+    document.querySelector<HTMLMetaElement>('meta[name="zverts:completion"]')?.content ||
+      document.querySelector<HTMLElement>("[data-zverts-completion]")?.dataset.zvertsCompletion ||
+      0
+  );
 
-  return { course, lesson };
+  return { currentCourse: course, currentModule, completionPercent };
 }
 
 function startFocusIfNeeded() {
-  if (!isLearningPage()) return;
-  const { course, lesson } = detectMetadata();
-  send({ type: "START_FOCUS", sourceUrl: location.href, currentCourse: course, currentLesson: lesson });
+  send({ type: "START_FOCUS", sourceUrl: location.href });
+  if (isLearningPage()) {
+    const context = detectMetadata();
+    send({ type: "LEARNING_CONTEXT", context });
+  }
 }
 
 function protectExternalLinks() {
@@ -165,8 +172,8 @@ function monitorFocus() {
 function listenForZvertsAppEvents() {
   window.addEventListener("message", (event) => {
     if (event.origin !== location.origin) return;
-    if (event.data?.type === "ZVERTS_PROGRESS_UPDATE") {
-      send({ type: "PROGRESS_UPDATE", progress: event.data.progress ?? {} });
+    if (event.data?.type === "ZVERTS_PROGRESS_UPDATE" || event.data?.type === "ZVERTS_LEARNING_CONTEXT") {
+      send({ type: "LEARNING_CONTEXT", context: event.data.context ?? event.data.progress ?? {} });
     }
     if (event.data?.type === "ZVERTS_NOTIFICATION") {
       send({ type: "NOTIFY", title: event.data.title, message: event.data.message });

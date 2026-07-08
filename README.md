@@ -1,27 +1,36 @@
 # ZverTs Focus
 
-Production-ready Chrome Extension (Manifest V3) for ZverTs learning protection.
+Production-ready Chrome Extension (Manifest V3) for ZverTs focus protection.
 
 ## Features
 
-- Smart ad/tracker blocking with Manifest V3 declarative net request rules.
-- Automatic Focus Mode on ZverTs course, lesson, module, watch, and quiz pages.
-- Distraction redirects for social/video sites during active study sessions.
-- Full-screen premium Focus page with Continue Learning / Return to ZverTs actions.
-- Persistent session timer with Chrome alarms and storage-backed auto resume.
-- Popup dashboard for remaining time, XP, streak, mission, gems, level, and course progress.
+- Ad/tracker blocking with Manifest V3 declarative net request rules only while Focus Mode is active.
+- Automatic Focus Mode when any `zverts.com` tab is open.
+- Automatic idle mode when no `zverts.com` tab exists, so normal browsing is untouched.
+- Distraction redirects for social/video sites during active ZverTs focus sessions.
+- Full-screen premium Focus page with a Return to ZverTs action.
+- Persistent focus timer with Chrome alarms.
+- Popup protection panel for remaining time, protected websites, blocked requests, focus duration, prevented distractions, live status, and ZverTs-provided course/task data.
 - ZverTs content bridge for progress, notifications, quiz rules, and admin policy updates.
 - Quiz Mode protections for right click, copy, paste, drag, selection, print/save shortcuts, fullscreen exits, and tab switches where Chrome allows detection.
 - YouTube Learning Mode when opened from ZverTs, hiding recommendations, comments, Shorts, feeds, and ad surfaces.
-- Options UI for whitelist, notifications, Pomodoro length, theme, reminders, blocked sites, quiz warning count, Supabase URL, and JWT.
+- Options UI for allowed sites, focus duration, notifications, sound, auto-start, Supabase URL, and JWT.
 
 ## ZverTs Site Integration
 
 The extension listens for these page messages from `https://www.zverts.com`:
 
 ```ts
-window.postMessage({ type: "ZVERTS_PROGRESS_UPDATE", progress: { xp: 1500 } }, location.origin);
-window.postMessage({ type: "ZVERTS_NOTIFICATION", title: "XP Earned", message: "+50 XP" }, location.origin);
+window.postMessage({
+  type: "ZVERTS_LEARNING_CONTEXT",
+  context: {
+    currentCourse: "Higher Mathematics",
+    currentModule: "Module 8 / 21",
+    currentTask: "Watch Module",
+    completionPercent: 67
+  }
+}, location.origin);
+window.postMessage({ type: "ZVERTS_NOTIFICATION", title: "Lesson Ready", message: "Continue your current module." }, location.origin);
 window.postMessage({ type: "ZVERTS_FOCUS_POLICY", policy: { quizWarningLimit: 2 } }, location.origin);
 window.postMessage({ type: "ZVERTS_QUIZ_START", config: { quizAction: "lock" } }, location.origin);
 ```
@@ -30,10 +39,11 @@ The page can also expose metadata with:
 
 ```html
 <meta name="zverts:course" content="Course name" />
-<meta name="zverts:lesson" content="Lesson name" />
+<meta name="zverts:module" content="Module 8 / 21" />
+<meta name="zverts:completion" content="67" />
 ```
 
-or `data-zverts-course`, `data-zverts-lesson`, and `data-zverts-quiz` attributes.
+or `data-zverts-course`, `data-zverts-module`, `data-zverts-completion`, and `data-zverts-quiz` attributes.
 
 ## Supabase
 

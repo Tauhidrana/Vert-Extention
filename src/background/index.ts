@@ -18,14 +18,15 @@ async function logEvent(event: Omit<FocusEvent, "id" | "at"> & { at?: number }) 
 }
 
 async function getState() {
-  const [session, policy, progress, settings, events] = await Promise.all([
+  await syncFocusWithZvertsTabs();
+  const [session, policy, learningContext, settings, events] = await Promise.all([
     storage.getSession(),
     storage.getPolicy(),
-    storage.getProgress(),
+    storage.getLearningContext(),
     storage.getSettings(),
     storage.getEvents()
   ]);
-  return { session, policy, progress, settings, events };
+  return { session, policy, learningContext, settings, events };
 }
 
 async function startFocus(input: Partial<FocusSession>) {
@@ -36,10 +37,10 @@ async function startFocus(input: Partial<FocusSession>) {
     const refreshed = {
       ...existing,
       sourceUrl: input.sourceUrl ?? existing.sourceUrl,
-      currentLesson: input.currentLesson ?? existing.currentLesson,
-      currentCourse: input.currentCourse ?? existing.currentCourse
+      zvertsTabId: input.zvertsTabId ?? existing.zvertsTabId
     };
     await storage.setSession(refreshed);
+    await setAdRulesEnabled(true);
     return refreshed;
   }
 
@@ -52,11 +53,11 @@ async function startFocus(input: Partial<FocusSession>) {
     endsAt: now + durationMinutes * 60_000,
     durationMinutes,
     sourceUrl: input.sourceUrl,
-    currentLesson: input.currentLesson,
-    currentCourse: input.currentCourse
+    zvertsTabId: input.zvertsTabId
   };
 
   await storage.setSession(session);
+  await setAdRulesEnabled(true);
   await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
   await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
   await logEvent({ type: "focus_started", url: input.sourceUrl, details: { durationMinutes } });
@@ -65,7 +66,14 @@ async function startFocus(input: Partial<FocusSession>) {
 
 async function endFocus(reason = "manual") {
   const previous = await storage.getSession();
-  await storage.setSession({ ...EMPTY_SESSION });
+  const preserveStoppedTab = reason === "timer_complete" || reason === "user_disabled";
+  await storage.setSession({
+    ...EMPTY_SESSION,
+    startedAt: preserveStoppedTab ? Date.now() : 0,
+    sourceUrl: preserveStoppedTab ? previous.sourceUrl : undefined,
+    zvertsTabId: preserveStoppedTab ? previous.zvertsTabId : undefined
+  });
+  await setAdRulesEnabled(false);
   await chrome.alarms.clear(TIMER_ALARM);
   await chrome.alarms.clear(REMINDER_ALARM);
   await logEvent({
@@ -77,7 +85,12 @@ async function endFocus(reason = "manual") {
 
 async function redirectBlockedTab(tabId: number, url: string, reason = "blocked_navigation") {
   const session = await storage.getSession();
-  await storage.setSession({ ...session, interruptionCount: session.interruptionCount + 1 });
+  await storage.setSession({
+    ...session,
+    interruptionCount: session.interruptionCount + 1,
+    distractionAttempts: session.distractionAttempts + 1,
+    blockedRequests: session.blockedRequests + 1
+  });
   await logEvent({ type: reason === "external_escape" ? "external_escape_blocked" : "blocked_navigation", url });
   await chrome.tabs.update(tabId, { url: focusPageUrl(url, reason) });
 }
@@ -144,12 +157,59 @@ function notify(title: string, message: string) {
   });
 }
 
+async function setAdRulesEnabled(enabled: boolean) {
+  await chrome.declarativeNetRequest.updateEnabledRulesets({
+    enableRulesetIds: enabled ? ["static_ads"] : [],
+    disableRulesetIds: enabled ? [] : ["static_ads"]
+  });
+}
+
+async function findZvertsTab() {
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) => isZvertsUrl(tab.url));
+}
+
+async function syncFocusWithZvertsTabs() {
+  const [settings, session] = await Promise.all([storage.getSettings(), storage.getSession()]);
+  const zvertsTab = await findZvertsTab();
+
+  if (!settings.autoStartFocus) {
+    if (session.active) await endFocus("auto_start_disabled");
+    return;
+  }
+
+  if (zvertsTab?.id && zvertsTab.url) {
+    const stoppedForSameTab = !session.active && session.zvertsTabId === zvertsTab.id && session.startedAt > 0;
+    if (stoppedForSameTab) {
+      await setAdRulesEnabled(false);
+      return;
+    }
+
+    if (!session.active || session.endsAt <= Date.now()) {
+      await logEvent({ type: "zverts_detected", url: zvertsTab.url });
+      await startFocus({ sourceUrl: zvertsTab.url, zvertsTabId: zvertsTab.id });
+    } else if (session.zvertsTabId !== zvertsTab.id || session.sourceUrl !== zvertsTab.url) {
+      await storage.setSession({ ...session, sourceUrl: zvertsTab.url, zvertsTabId: zvertsTab.id });
+      await setAdRulesEnabled(true);
+    }
+    return;
+  }
+
+  if (session.active) {
+    await logEvent({ type: "zverts_closed", url: session.sourceUrl });
+    await endFocus("zverts_tab_closed");
+  } else {
+    await setAdRulesEnabled(false);
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   const state = await getState();
   await storage.setPolicy({ ...DEFAULT_POLICY, ...state.policy, messages: { ...DEFAULT_POLICY.messages, ...state.policy.messages } });
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await syncFocusWithZvertsTabs();
   const session = await storage.getSession();
   if (!session.active) return;
   if (session.endsAt <= Date.now()) {
@@ -184,9 +244,9 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
       case "QUIZ_EVENT":
         sendResponse({ ok: true, state: await handleQuizEvent(message) });
         break;
-      case "PROGRESS_UPDATE": {
-        const progress = await storage.getProgress();
-        await storage.setProgress({ ...progress, ...message.progress });
+      case "LEARNING_CONTEXT": {
+        const context = await storage.getLearningContext();
+        await storage.setLearningContext({ ...context, ...message.context, updatedAt: Date.now() });
         sendResponse({ ok: true });
         break;
       }
@@ -212,14 +272,26 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete" || changeInfo.url) {
+    syncFocusWithZvertsTabs().catch(() => undefined);
+  }
+
   if (changeInfo.status === "loading") {
     maybeBlockNavigation(tabId, changeInfo.url ?? tab.url);
   }
 
   const url = changeInfo.url ?? tab.url;
   if (url && isLikelyLearningPage(url)) {
-    startFocus({ sourceUrl: url }).catch(() => undefined);
+    startFocus({ sourceUrl: url, zvertsTabId: tabId }).catch(() => undefined);
   }
+});
+
+chrome.tabs.onRemoved.addListener(() => {
+  syncFocusWithZvertsTabs().catch(() => undefined);
+});
+
+chrome.tabs.onActivated.addListener(() => {
+  syncFocusWithZvertsTabs().catch(() => undefined);
 });
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {
@@ -230,7 +302,8 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
 
 chrome.webNavigation.onCommitted.addListener(async (details) => {
   if (details.frameId !== 0 || !isZvertsUrl(details.url)) return;
-  if (isLikelyLearningPage(details.url)) await startFocus({ sourceUrl: details.url });
+  await syncFocusWithZvertsTabs();
+  if (isLikelyLearningPage(details.url)) await startFocus({ sourceUrl: details.url, zvertsTabId: details.tabId });
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {

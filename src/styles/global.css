@@ -33,6 +33,12 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
+  transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.glass:hover {
+  border-color: rgba(74, 222, 128, 0.22);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.34), 0 0 28px rgba(74, 222, 128, 0.08);
 }
 
 .focus-ring {
@@ -42,4 +48,19 @@ select {
 
 .focus-ring:focus-visible {
   outline-color: #4ade80;
+}
+
+@keyframes soft-pulse {
+  0%, 100% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.shadow-glow {
+  animation: soft-pulse 2.8s ease-in-out infinite;
 }

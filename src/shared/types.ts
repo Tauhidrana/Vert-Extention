@@ -22,30 +22,29 @@ export interface FocusSession {
   endsAt: number;
   durationMinutes: number;
   sourceUrl?: string;
-  currentLesson?: string;
-  currentCourse?: string;
   quizMode: boolean;
   quizSwitches: number;
   fullscreenExits: number;
   interruptionCount: number;
+  blockedRequests: number;
+  distractionAttempts: number;
+  zvertsTabId?: number;
 }
 
-export interface UserProgress {
-  xp: number;
-  gems: number;
-  level: number;
-  streak: number;
-  todaysGoalMinutes: number;
-  studiedTodayMinutes: number;
-  course: string;
-  module: string;
+export interface LearningContext {
+  currentCourse?: string;
+  currentModule?: string;
+  currentTask?: "Watch Module" | "Quiz" | "Revision" | "Learning";
   completionPercent: number;
-  watchTimeMinutes: number;
-  remainingLessons: number;
+  moduleIndex?: number;
+  moduleTotal?: number;
+  updatedAt?: number;
 }
 
 export interface UserSettings {
   notificationsEnabled: boolean;
+  soundEnabled: boolean;
+  autoStartFocus: boolean;
   pomodoroMinutes: number;
   studyReminderMinutes: number;
   whitelist: string[];
@@ -66,20 +65,22 @@ export interface FocusEvent {
     | "quiz_locked"
     | "fullscreen_exit"
     | "idle_reminder"
-    | "unexpected_end";
+    | "unexpected_end"
+    | "zverts_detected"
+    | "zverts_closed";
   at: number;
   url?: string;
   details?: Record<string, unknown>;
 }
 
 export type RuntimeMessage =
-  | { type: "START_FOCUS"; durationMinutes?: number; sourceUrl?: string; currentLesson?: string; currentCourse?: string }
+  | { type: "START_FOCUS"; durationMinutes?: number; sourceUrl?: string; zvertsTabId?: number }
   | { type: "END_FOCUS"; reason?: string }
   | { type: "GET_STATE" }
   | { type: "OPEN_FOCUS_PAGE"; url?: string; reason?: string }
   | { type: "QUIZ_STARTED"; config?: Partial<FocusPolicy> }
   | { type: "QUIZ_EVENT"; event: "switch" | "blur" | "hidden" | "fullscreen_exit" | "focus"; url?: string }
-  | { type: "PROGRESS_UPDATE"; progress: Partial<UserProgress> }
+  | { type: "LEARNING_CONTEXT"; context: Partial<LearningContext> }
   | { type: "NOTIFY"; title: string; message: string }
   | { type: "SAVE_SETTINGS"; settings: Partial<UserSettings> }
   | { type: "ADMIN_POLICY"; policy: Partial<FocusPolicy> };

@@ -76,7 +76,7 @@
     "rule_resources": [
       {
         "id": "static_ads",
-        "enabled": true,
+        "enabled": false,
         "path": "rules/static-ads.json"
       }
     ]
