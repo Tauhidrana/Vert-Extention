@@ -2,7 +2,7 @@ import { DEFAULT_LEARNING_CONTEXT, DEFAULT_POLICY, EMPTY_SESSION } from "../shar
 import { postSecureEvent } from "../shared/supabase";
 import { storage } from "../shared/storage";
 import type { FocusEvent, FocusPolicy, FocusSession, RuntimeMessage } from "../shared/types";
-import { focusPageUrl, isBlockedByPolicy, isLikelyLearningPage, isZvertsUrl } from "../shared/url";
+import { focusPageUrl, isAiBlockedByPolicy, isBlockedByPolicy, isLikelyLearningPage, isZvertsUrl } from "../shared/url";
 
 const TIMER_ALARM = "zverts-focus-timer";
 const REMINDER_ALARM = "zverts-study-reminder";
@@ -105,6 +105,12 @@ async function maybeBlockNavigation(tabId: number, url?: string) {
   if (!session.active) return;
 
   try {
+    if (session.quizMode && isAiBlockedByPolicy(url, policy.aiBlockedSites)) {
+      await redirectBlockedTab(tabId, url, "ai_tool_blocked");
+      await handleQuizEvent({ type: "QUIZ_EVENT", event: "ai_tool", url, details: { violation: "ai_tool_blocked" } });
+      return;
+    }
+
     if (isBlockedByPolicy(url, policy.blockedSites, settings.whitelist)) {
       await redirectBlockedTab(tabId, url);
     }
@@ -119,34 +125,73 @@ async function handleQuizEvent(event: Extract<RuntimeMessage, { type: "QUIZ_EVEN
 
   const isSwitch = event.event === "switch" || event.event === "blur" || event.event === "hidden";
   const fullscreenExit = event.event === "fullscreen_exit";
+  const isViolation = event.event !== "focus";
   const quizSwitches = isSwitch ? session.quizSwitches + 1 : session.quizSwitches;
   const fullscreenExits = fullscreenExit ? session.fullscreenExits + 1 : session.fullscreenExits;
-  const next = { ...session, quizSwitches, fullscreenExits };
+  const quizViolations = isViolation ? session.quizViolations + 1 : session.quizViolations;
+  const quizPaused = session.quizPaused || fullscreenExit || event.event === "devtools";
+  const next = { ...session, quizSwitches, fullscreenExits, quizViolations, quizPaused };
   await storage.setSession(next);
 
-  if (isSwitch || fullscreenExit) {
+  const eventType = quizEventToFocusEvent(event.event);
+  if (eventType) {
     await logEvent({
-      type: fullscreenExit ? "fullscreen_exit" : "quiz_warning",
+      type: eventType,
       url: event.url,
-      details: { quizSwitches, fullscreenExits, limit: policy.quizWarningLimit }
+      details: { ...event.details, quizSwitches, fullscreenExits, quizViolations, limit: policy.quizWarningLimit }
     });
   }
 
-  if (quizSwitches >= policy.quizWarningLimit || fullscreenExits >= policy.quizWarningLimit) {
+  await notifyZvertsQuizEvent({
+    event: event.event,
+    url: event.url,
+    details: event.details,
+    warningCount: quizViolations,
+    tabSwitches: quizSwitches,
+    fullscreenExits
+  });
+
+  if (quizViolations >= policy.quizWarningLimit) {
     await logEvent({ type: "quiz_locked", url: event.url, details: { action: policy.quizAction } });
+    await notifyZvertsQuizEvent({ event: "quiz_locked", details: { action: policy.quizAction, warningCount: quizViolations } });
     notify("Quiz Protected", policy.quizAction === "submit" ? "Quiz auto-submit requested." : "Quiz locked after repeated focus exits.");
   }
   return next;
 }
 
-async function enableQuizMode(config?: Partial<FocusPolicy>) {
+function quizEventToFocusEvent(event: Extract<RuntimeMessage, { type: "QUIZ_EVENT" }>["event"]): FocusEvent["type"] | null {
+  switch (event) {
+    case "fullscreen_exit": return "fullscreen_exit";
+    case "right_click": return "right_click_blocked";
+    case "shortcut": return "shortcut_blocked";
+    case "clipboard": return "clipboard_blocked";
+    case "devtools": return "devtools_attempt";
+    case "ai_tool": return "ai_tool_blocked";
+    case "screenshot": return "screenshot_attempt";
+    case "multi_monitor": return "multi_monitor_warning";
+    case "switch":
+    case "blur":
+    case "hidden": return "quiz_warning";
+    default: return null;
+  }
+}
+
+async function enableQuizMode(message: Extract<RuntimeMessage, { type: "QUIZ_STARTED" }>) {
   const [session, policy] = await Promise.all([storage.getSession(), storage.getPolicy()]);
-  const nextPolicy = { ...policy, ...config, messages: { ...policy.messages, ...config?.messages } };
+  const nextPolicy = { ...policy, ...message.config, messages: { ...policy.messages, ...message.config?.messages } };
   await storage.setPolicy(nextPolicy);
-  const nextSession = session.active ? { ...session, quizMode: true, quizSwitches: 0, fullscreenExits: 0 } : await startFocus({});
-  await storage.setSession({ ...nextSession, quizMode: true });
+  const nextSession = session.active ? { ...session, quizMode: true, quizPaused: false, quizSessionId: message.quizSessionId, quizSwitches: 0, fullscreenExits: 0, quizViolations: 0 } : await startFocus({});
+  await storage.setSession({ ...nextSession, quizMode: true, quizPaused: false, quizSessionId: message.quizSessionId });
   await logEvent({ type: "quiz_started", url: nextSession.sourceUrl });
+  await notifyZvertsQuizEvent({ event: "quiz_started", details: { quizSessionId: message.quizSessionId } });
   return nextSession;
+}
+
+async function endQuizMode(reason = "quiz_end") {
+  const session = await storage.getSession();
+  await storage.setSession({ ...session, quizMode: false, quizPaused: false, quizSessionId: undefined });
+  await logEvent({ type: "quiz_ended", url: session.sourceUrl, details: { reason } });
+  await notifyZvertsQuizEvent({ event: "quiz_ended", details: { reason } });
 }
 
 function notify(title: string, message: string) {
@@ -215,6 +260,13 @@ async function requestActiveSessionFromZvertsTab(tabId?: number) {
   await chrome.tabs.sendMessage(targetTabId, { type: "REQUEST_LEARNING_SESSION_SYNC" }).catch(() => undefined);
 }
 
+async function notifyZvertsQuizEvent(payload: Record<string, unknown>) {
+  const session = await storage.getSession();
+  const targetTabId = session.zvertsTabId ?? (await findZvertsTab())?.id;
+  if (!targetTabId) return;
+  await chrome.tabs.sendMessage(targetTabId, { type: "QUIZ_EVENT_FROM_EXTENSION", payload }).catch(() => undefined);
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   const state = await getState();
   await storage.setPolicy({ ...DEFAULT_POLICY, ...state.policy, messages: { ...DEFAULT_POLICY.messages, ...state.policy.messages } });
@@ -255,7 +307,11 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
         sendResponse({ ok: true });
         break;
       case "QUIZ_STARTED":
-        sendResponse({ ok: true, state: await enableQuizMode(message.config) });
+        sendResponse({ ok: true, state: await enableQuizMode(message) });
+        break;
+      case "QUIZ_ENDED":
+        await endQuizMode(message.reason);
+        sendResponse({ ok: true, state: await getState() });
         break;
       case "QUIZ_EVENT":
         sendResponse({ ok: true, state: await handleQuizEvent(message) });
@@ -285,6 +341,9 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
         sendResponse({ ok: true });
         break;
       }
+      case "QUIZ_EVENT_FROM_EXTENSION":
+        sendResponse({ ok: true });
+        break;
     }
   })().catch((error) => sendResponse({ ok: false, error: String(error) }));
   return true;
@@ -311,6 +370,13 @@ chrome.tabs.onRemoved.addListener(() => {
 
 chrome.tabs.onActivated.addListener(() => {
   syncFocusWithZvertsTabs().catch(() => undefined);
+  handleQuizEvent({ type: "QUIZ_EVENT", event: "switch", details: { source: "tabs.onActivated" } }).catch(() => undefined);
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    handleQuizEvent({ type: "QUIZ_EVENT", event: "blur", details: { source: "windows.onFocusChanged" } }).catch(() => undefined);
+  }
 });
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {

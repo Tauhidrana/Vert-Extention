@@ -4,6 +4,7 @@ export type QuizAction = "lock" | "submit";
 
 export interface FocusPolicy {
   blockedSites: string[];
+  aiBlockedSites: string[];
   socialPathBlocks: string[];
   youtubeAllowedReferrers: string[];
   quizWarningLimit: number;
@@ -23,8 +24,11 @@ export interface FocusSession {
   durationMinutes: number;
   sourceUrl?: string;
   quizMode: boolean;
+  quizPaused: boolean;
+  quizSessionId?: string;
   quizSwitches: number;
   fullscreenExits: number;
+  quizViolations: number;
   interruptionCount: number;
   blockedRequests: number;
   distractionAttempts: number;
@@ -72,8 +76,17 @@ export interface FocusEvent {
     | "blocked_navigation"
     | "external_escape_blocked"
     | "quiz_started"
+    | "quiz_ended"
     | "quiz_warning"
     | "quiz_locked"
+    | "quiz_paused"
+    | "ai_tool_blocked"
+    | "right_click_blocked"
+    | "shortcut_blocked"
+    | "clipboard_blocked"
+    | "devtools_attempt"
+    | "screenshot_attempt"
+    | "multi_monitor_warning"
     | "fullscreen_exit"
     | "idle_reminder"
     | "unexpected_end"
@@ -89,8 +102,10 @@ export type RuntimeMessage =
   | { type: "END_FOCUS"; reason?: string }
   | { type: "GET_STATE" }
   | { type: "OPEN_FOCUS_PAGE"; url?: string; reason?: string }
-  | { type: "QUIZ_STARTED"; config?: Partial<FocusPolicy> }
-  | { type: "QUIZ_EVENT"; event: "switch" | "blur" | "hidden" | "fullscreen_exit" | "focus"; url?: string }
+  | { type: "QUIZ_STARTED"; quizSessionId?: string; config?: Partial<FocusPolicy> }
+  | { type: "QUIZ_ENDED"; reason?: string }
+  | { type: "QUIZ_EVENT"; event: "switch" | "blur" | "hidden" | "fullscreen_exit" | "focus" | "right_click" | "shortcut" | "clipboard" | "devtools" | "screenshot" | "multi_monitor" | "ai_tool"; url?: string; details?: Record<string, unknown> }
+  | { type: "QUIZ_EVENT_FROM_EXTENSION"; payload: Record<string, unknown> }
   | { type: "LEARNING_CONTEXT"; context: Partial<LearningContext> }
   | { type: "REQUEST_LEARNING_SESSION_SYNC" }
   | { type: "NOTIFY"; title: string; message: string }

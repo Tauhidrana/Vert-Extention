@@ -1,4 +1,5 @@
 import type { FocusPolicy, FocusSession, LearningContext, UserSettings } from "./types";
+import { AI_BLOCKED_SITES } from "./ai-blocklist";
 
 export const ZVERTS_ORIGINS = ["https://www.zverts.com", "https://zverts.com"];
 
@@ -21,6 +22,7 @@ export const DEFAULT_POLICY: FocusPolicy = {
     "youtube.com/feed",
     "youtube.com/shorts"
   ],
+  aiBlockedSites: AI_BLOCKED_SITES,
   socialPathBlocks: ["linkedin.com/feed"],
   youtubeAllowedReferrers: ["zverts.com"],
   quizWarningLimit: 3,
@@ -39,8 +41,10 @@ export const EMPTY_SESSION: FocusSession = {
   endsAt: 0,
   durationMinutes: 0,
   quizMode: false,
+  quizPaused: false,
   quizSwitches: 0,
   fullscreenExits: 0,
+  quizViolations: 0,
   interruptionCount: 0,
   blockedRequests: 0,
   distractionAttempts: 0

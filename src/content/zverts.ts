@@ -1,6 +1,8 @@
 import type { LearningContext, RuntimeMessage } from "../shared/types";
 
 const send = <T extends RuntimeMessage>(message: T) => chrome.runtime.sendMessage(message).catch(() => undefined);
+const QUIZ_FLAG = "zvertsQuizMode";
+const QUIZ_PAUSED_FLAG = "zvertsQuizPaused";
 
 const SOCIAL_HOSTS = [
   "facebook.com",
@@ -54,14 +56,23 @@ function protectExternalLinks() {
 }
 
 function installQuizShield() {
-  const blockedEvents = ["contextmenu", "copy", "paste", "cut", "dragstart", "selectstart"];
+  const blockedEvents = ["contextmenu", "copy", "paste", "cut", "dragstart", "dragover", "drop", "selectstart", "mousedown", "mouseup"];
   blockedEvents.forEach((name) => {
     document.addEventListener(
       name,
       (event) => {
-        if (!document.documentElement.dataset.zvertsQuizMode) return;
+        if (!isQuizMode()) return;
+        if (name === "mousedown" || name === "mouseup") {
+          const mouseEvent = event as MouseEvent;
+          if (mouseEvent.button !== 2) return;
+        }
         event.preventDefault();
         event.stopPropagation();
+        if (name === "contextmenu" || name === "mousedown" || name === "mouseup") {
+          reportQuizViolation("right_click", { event: name });
+        } else if (["copy", "paste", "cut"].includes(name)) {
+          reportQuizViolation("clipboard", { event: name });
+        }
       },
       true
     );
@@ -70,19 +81,38 @@ function installQuizShield() {
   document.addEventListener(
     "keydown",
     (event) => {
-      if (!document.documentElement.dataset.zvertsQuizMode) return;
+      if (!isQuizMode()) return;
       const key = event.key.toLowerCase();
+      const ctrl = event.ctrlKey || event.metaKey;
+      const blockedCtrlKeys = ["a", "c", "v", "x", "p", "s", "u", "j", "l", "t", "n", "w", "r", "tab"];
       const blocked =
-        (event.ctrlKey || event.metaKey) &&
-        ["c", "v", "x", "p", "s", "u", "i", "j"].includes(key);
-      const devToolsCombo = key === "f12" || ((event.ctrlKey || event.metaKey) && event.shiftKey && ["i", "j", "c"].includes(key));
-      if (blocked || devToolsCombo) {
+        (ctrl && blockedCtrlKeys.includes(key)) ||
+        (ctrl && event.shiftKey && ["i", "j", "c", "n", "r", "escape", "esc", "tab"].includes(key)) ||
+        (event.altKey && key === "tab") ||
+        key === "f12" ||
+        key === "printscreen";
+
+      if (blocked) {
         event.preventDefault();
         event.stopPropagation();
+        if (key === "f12" || (ctrl && event.shiftKey && ["i", "j", "c"].includes(key)) || (ctrl && key === "u")) {
+          pauseQuiz("Developer tools attempt detected.");
+          reportQuizViolation("devtools", { key: event.key, ctrl, shift: event.shiftKey, alt: event.altKey });
+        } else if (key === "printscreen") {
+          reportQuizViolation("screenshot", { key: event.key });
+        } else {
+          reportQuizViolation("shortcut", { key: event.key, ctrl, shift: event.shiftKey, alt: event.altKey });
+        }
       }
     },
     true
   );
+
+  document.addEventListener("keyup", (event) => {
+    if (isQuizMode() && event.key.toLowerCase() === "printscreen") {
+      reportQuizViolation("screenshot", { key: event.key, phase: "keyup" });
+    }
+  }, true);
 }
 
 function showQuizBanner(message = "Quiz Protected") {
@@ -107,18 +137,83 @@ function showQuizBanner(message = "Quiz Protected") {
   document.documentElement.appendChild(banner);
 }
 
-function enterQuizMode(config?: Record<string, unknown>) {
-  document.documentElement.dataset.zvertsQuizMode = "true";
+function showPauseOverlay(message = "Return to fullscreen to continue.") {
+  let overlay = document.getElementById("zverts-quiz-pause");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "zverts-quiz-pause";
+    overlay.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "z-index:2147483647",
+      "display:grid",
+      "place-items:center",
+      "background:rgba(11,15,20,.96)",
+      "color:#fff",
+      "font:600 16px Inter,system-ui,sans-serif",
+      "text-align:center",
+      "padding:24px"
+    ].join(";");
+    overlay.innerHTML = `<div style="max-width:420px"><div style="font-size:28px;font-weight:900;margin-bottom:12px">Quiz Paused</div><p style="color:rgba(255,255,255,.68);line-height:1.6">${message}</p><button id="zverts-return-fullscreen" style="margin-top:18px;border:0;border-radius:10px;background:#4ADE80;color:#0B0F14;padding:12px 18px;font-weight:800;cursor:pointer">Return to fullscreen</button></div>`;
+    document.documentElement.appendChild(overlay);
+    document.getElementById("zverts-return-fullscreen")?.addEventListener("click", () => {
+      document.documentElement.requestFullscreen?.().catch(() => undefined);
+    });
+  }
+  overlay.style.display = "grid";
+}
+
+function hidePauseOverlay() {
+  const overlay = document.getElementById("zverts-quiz-pause");
+  if (overlay) overlay.style.display = "none";
+}
+
+function isQuizMode() {
+  return document.documentElement.dataset[QUIZ_FLAG] === "true";
+}
+
+function reportToWebsite(type: string, payload: Record<string, unknown> = {}) {
+  window.postMessage({ type, payload }, location.origin);
+  window.dispatchEvent(new CustomEvent(type.toLowerCase().replaceAll("_", "-"), { detail: payload }));
+}
+
+function reportQuizViolation(event: Extract<RuntimeMessage, { type: "QUIZ_EVENT" }>["event"], details: Record<string, unknown> = {}) {
+  send({ type: "QUIZ_EVENT", event, url: location.href, details });
+  reportToWebsite("ZVERTS_FOCUS_QUIZ_EVENT", { event, url: location.href, details });
+}
+
+function pauseQuiz(message: string) {
+  document.documentElement.dataset[QUIZ_PAUSED_FLAG] = "true";
+  showPauseOverlay(message);
+  reportToWebsite("ZVERTS_FOCUS_QUIZ_PAUSED", { message, url: location.href });
+}
+
+function enterQuizMode(config?: Record<string, unknown>, quizSessionId?: string) {
+  if (!location.pathname.toLowerCase().includes("quiz") && !document.querySelector("[data-zverts-quiz], [data-quiz-active], .zverts-quiz")) return;
+  document.documentElement.dataset[QUIZ_FLAG] = "true";
+  document.documentElement.dataset[QUIZ_PAUSED_FLAG] = "false";
   document.documentElement.style.userSelect = "none";
   showQuizBanner();
-  send({ type: "QUIZ_STARTED", config });
-  document.documentElement.requestFullscreen?.().catch(() => undefined);
+  send({ type: "QUIZ_STARTED", quizSessionId, config });
+  reportToWebsite("ZVERTS_FOCUS_QUIZ_STARTED", { quizSessionId, url: location.href });
+  document.documentElement.requestFullscreen?.().catch(() => {
+    pauseQuiz("Fullscreen is required before starting the quiz.");
+  });
+  detectMultipleMonitors();
+}
+
+function exitQuizMode(reason = "quiz_end") {
+  delete document.documentElement.dataset[QUIZ_FLAG];
+  delete document.documentElement.dataset[QUIZ_PAUSED_FLAG];
+  document.documentElement.style.userSelect = "";
+  hidePauseOverlay();
+  send({ type: "QUIZ_ENDED", reason });
+  reportToWebsite("ZVERTS_FOCUS_QUIZ_ENDED", { reason, url: location.href });
+  document.exitFullscreen?.().catch(() => undefined);
 }
 
 function detectQuizStart() {
-  const hasQuizSignal =
-    location.pathname.toLowerCase().includes("quiz") ||
-    Boolean(document.querySelector("[data-zverts-quiz], [data-quiz-active], .zverts-quiz"));
+  const hasQuizSignal = Boolean(document.querySelector("[data-zverts-quiz], [data-quiz-active], .zverts-quiz"));
   if (hasQuizSignal) enterQuizMode();
 
   const observer = new MutationObserver(() => {
@@ -129,23 +224,59 @@ function detectQuizStart() {
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   window.addEventListener("message", (event) => {
-    if (event.origin !== location.origin || event.data?.type !== "ZVERTS_QUIZ_START") return;
-    enterQuizMode(event.data.config);
+    if (event.origin !== location.origin) return;
+    if (event.data?.type === "ZVERTS_QUIZ_START" || event.data?.type === "QUIZ_START") {
+      enterQuizMode(event.data.config, event.data.quizSessionId ?? event.data.sessionId);
+    }
+    if (event.data?.type === "ZVERTS_QUIZ_END" || event.data?.type === "QUIZ_END") {
+      exitQuizMode(event.data.reason ?? "website_quiz_end");
+    }
   });
 }
 
 function monitorFocus() {
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) send({ type: "QUIZ_EVENT", event: "hidden", url: location.href });
+    if (document.hidden && isQuizMode()) reportQuizViolation("hidden", { source: "visibilitychange" });
   });
-  window.addEventListener("blur", () => send({ type: "QUIZ_EVENT", event: "blur", url: location.href }));
-  window.addEventListener("focus", () => send({ type: "QUIZ_EVENT", event: "focus", url: location.href }));
+  window.addEventListener("blur", () => {
+    if (isQuizMode()) reportQuizViolation("blur", { source: "window.blur" });
+  });
+  window.addEventListener("focus", () => {
+    if (isQuizMode()) send({ type: "QUIZ_EVENT", event: "focus", url: location.href });
+  });
   document.addEventListener("fullscreenchange", () => {
-    if (document.documentElement.dataset.zvertsQuizMode && !document.fullscreenElement) {
-      showQuizBanner("Fullscreen required");
-      send({ type: "QUIZ_EVENT", event: "fullscreen_exit", url: location.href });
+    if (isQuizMode() && !document.fullscreenElement) {
+      pauseQuiz("Return to fullscreen to continue.");
+      reportQuizViolation("fullscreen_exit", { source: "fullscreenchange" });
+    } else if (isQuizMode() && document.fullscreenElement) {
+      document.documentElement.dataset[QUIZ_PAUSED_FLAG] = "false";
+      hidePauseOverlay();
     }
   });
+}
+
+function detectDevtoolsOpen() {
+  if (!isQuizMode()) return;
+  const threshold = 160;
+  const widthOpen = window.outerWidth - window.innerWidth > threshold;
+  const heightOpen = window.outerHeight - window.innerHeight > threshold;
+  if (widthOpen || heightOpen) {
+    pauseQuiz("Developer tools attempt detected.");
+    reportQuizViolation("devtools", { source: "viewport_heuristic", widthOpen, heightOpen });
+  }
+}
+
+async function detectMultipleMonitors() {
+  try {
+    const getScreenDetails = (window as unknown as { getScreenDetails?: () => Promise<{ screens?: unknown[] }> }).getScreenDetails;
+    if (!getScreenDetails) return;
+    const details = await getScreenDetails.call(window);
+    if ((details.screens?.length ?? 1) > 1) {
+      reportQuizViolation("multi_monitor", { screens: details.screens?.length });
+    }
+  } catch {
+    // Browser support and permissions vary; failure means no signal is available.
+  }
 }
 
 function listenForZvertsAppEvents() {
@@ -275,6 +406,9 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
   if (message.type === "REQUEST_LEARNING_SESSION_SYNC") {
     requestActiveLearningSession();
   }
+  if (message.type === "QUIZ_EVENT_FROM_EXTENSION") {
+    reportToWebsite("ZVERTS_FOCUS_QUIZ_EVENT", message.payload as Record<string, unknown>);
+  }
 });
 
 window.addEventListener("focus", scheduleSessionSync);
@@ -291,6 +425,7 @@ history.pushState = function patchedPushState(...args) {
 window.addEventListener("popstate", scheduleSessionSync);
 new MutationObserver(scheduleSessionSync).observe(document.documentElement, { childList: true, subtree: true });
 window.setInterval(requestActiveLearningSession, 10_000);
+window.setInterval(detectDevtoolsOpen, 1_000);
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {

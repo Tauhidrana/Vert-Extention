@@ -71,7 +71,8 @@ window.postMessage({
 }, location.origin);
 window.postMessage({ type: "ZVERTS_NOTIFICATION", title: "Lesson Ready", message: "Continue your current module." }, location.origin);
 window.postMessage({ type: "ZVERTS_FOCUS_POLICY", policy: { quizWarningLimit: 2 } }, location.origin);
-window.postMessage({ type: "ZVERTS_QUIZ_START", config: { quizAction: "lock" } }, location.origin);
+window.postMessage({ type: "ZVERTS_QUIZ_START", quizSessionId: "quiz_123", config: { quizAction: "lock" } }, location.origin);
+window.postMessage({ type: "ZVERTS_QUIZ_END", reason: "submitted" }, location.origin);
 ```
 
 If no session is active, send:
@@ -91,6 +92,21 @@ No secrets are bundled. Add a user JWT and Supabase URL in the options page. Eve
 - `GET /functions/v1/focus-policy`
 
 Validate JWTs server-side in Supabase Edge Functions.
+
+## Exam Protection
+
+Exam Protection Mode only activates when ZverTs starts a quiz with `ZVERTS_QUIZ_START` or the page exposes an explicit quiz-active marker such as `data-zverts-quiz`.
+
+During quiz mode the extension:
+
+- blocks right click, context menu, drag/drop, copy, paste, cut, text selection, and common browser shortcuts where Chrome allows it
+- requests fullscreen and pauses the quiz if fullscreen exits
+- logs tab switches, focus loss, screenshot-key attempts, developer-tool shortcuts, and best-effort DevTools viewport detection
+- blocks AI tools only during quiz mode
+- redirects AI tool attempts to the local extension block page
+- sends quiz events back to the ZverTs page as `ZVERTS_FOCUS_QUIZ_EVENT`
+
+The configurable AI blocklist lives in `src/shared/ai-blocklist.ts`.
 
 ## Build
 

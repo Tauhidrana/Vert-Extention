@@ -35,6 +35,17 @@ export const isBlockedByPolicy = (url: string, blockedSites: string[], whitelist
   });
 };
 
+export const isAiBlockedByPolicy = (url: string, aiBlockedSites: string[]): boolean => {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname.replace(/^www\./, "");
+  const full = `${hostname}${parsed.pathname}`;
+
+  return aiBlockedSites.some((site) => {
+    const clean = site.replace(/^https?:\/\//, "").replace(/^www\./, "");
+    return full === clean || full.startsWith(`${clean}/`) || hostname === clean || hostname.endsWith(`.${clean}`);
+  });
+};
+
 export const isLikelyLearningPage = (url: string): boolean => {
   if (!isZvertsUrl(url)) return false;
   const path = new URL(url).pathname.toLowerCase();
