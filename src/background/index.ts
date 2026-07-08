@@ -1,0 +1,250 @@
+import { DEFAULT_POLICY, EMPTY_SESSION } from "../shared/defaults";
+import { postSecureEvent } from "../shared/supabase";
+import { storage } from "../shared/storage";
+import type { FocusEvent, FocusPolicy, FocusSession, RuntimeMessage } from "../shared/types";
+import { focusPageUrl, isBlockedByPolicy, isLikelyLearningPage, isZvertsUrl } from "../shared/url";
+
+const TIMER_ALARM = "zverts-focus-timer";
+const REMINDER_ALARM = "zverts-study-reminder";
+
+async function logEvent(event: Omit<FocusEvent, "id" | "at"> & { at?: number }) {
+  await storage.addEvent(event);
+  const events = await storage.getEvents();
+  const settings = await storage.getSettings();
+  const latest = events[0];
+  if (latest) {
+    postSecureEvent(settings, latest).catch(() => undefined);
+  }
+}
+
+async function getState() {
+  const [session, policy, progress, settings, events] = await Promise.all([
+    storage.getSession(),
+    storage.getPolicy(),
+    storage.getProgress(),
+    storage.getSettings(),
+    storage.getEvents()
+  ]);
+  return { session, policy, progress, settings, events };
+}
+
+async function startFocus(input: Partial<FocusSession>) {
+  const policy = await storage.getPolicy();
+  const settings = await storage.getSettings();
+  const existing = await storage.getSession();
+  if (existing.active && existing.endsAt > Date.now() && input.durationMinutes === undefined) {
+    const refreshed = {
+      ...existing,
+      sourceUrl: input.sourceUrl ?? existing.sourceUrl,
+      currentLesson: input.currentLesson ?? existing.currentLesson,
+      currentCourse: input.currentCourse ?? existing.currentCourse
+    };
+    await storage.setSession(refreshed);
+    return refreshed;
+  }
+
+  const durationMinutes = input.durationMinutes ?? settings.pomodoroMinutes ?? policy.defaultTimerMinutes;
+  const now = Date.now();
+  const session: FocusSession = {
+    ...EMPTY_SESSION,
+    active: true,
+    startedAt: now,
+    endsAt: now + durationMinutes * 60_000,
+    durationMinutes,
+    sourceUrl: input.sourceUrl,
+    currentLesson: input.currentLesson,
+    currentCourse: input.currentCourse
+  };
+
+  await storage.setSession(session);
+  await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
+  await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
+  await logEvent({ type: "focus_started", url: input.sourceUrl, details: { durationMinutes } });
+  return session;
+}
+
+async function endFocus(reason = "manual") {
+  const previous = await storage.getSession();
+  await storage.setSession({ ...EMPTY_SESSION });
+  await chrome.alarms.clear(TIMER_ALARM);
+  await chrome.alarms.clear(REMINDER_ALARM);
+  await logEvent({
+    type: reason === "unexpected" ? "unexpected_end" : "focus_ended",
+    url: previous.sourceUrl,
+    details: { reason, interruptionCount: previous.interruptionCount }
+  });
+}
+
+async function redirectBlockedTab(tabId: number, url: string, reason = "blocked_navigation") {
+  const session = await storage.getSession();
+  await storage.setSession({ ...session, interruptionCount: session.interruptionCount + 1 });
+  await logEvent({ type: reason === "external_escape" ? "external_escape_blocked" : "blocked_navigation", url });
+  await chrome.tabs.update(tabId, { url: focusPageUrl(url, reason) });
+}
+
+async function maybeBlockNavigation(tabId: number, url?: string) {
+  if (!url || url.startsWith(chrome.runtime.getURL(""))) return;
+  const [session, policy, settings] = await Promise.all([storage.getSession(), storage.getPolicy(), storage.getSettings()]);
+  if (!session.active) return;
+
+  try {
+    if (isBlockedByPolicy(url, policy.blockedSites, settings.whitelist)) {
+      await redirectBlockedTab(tabId, url);
+    }
+  } catch {
+    // Ignore URLs Chrome exposes that are not valid HTTP(S) URLs.
+  }
+}
+
+async function handleQuizEvent(event: Extract<RuntimeMessage, { type: "QUIZ_EVENT" }>) {
+  const [session, policy] = await Promise.all([storage.getSession(), storage.getPolicy()]);
+  if (!session.active || !session.quizMode) return session;
+
+  const isSwitch = event.event === "switch" || event.event === "blur" || event.event === "hidden";
+  const fullscreenExit = event.event === "fullscreen_exit";
+  const quizSwitches = isSwitch ? session.quizSwitches + 1 : session.quizSwitches;
+  const fullscreenExits = fullscreenExit ? session.fullscreenExits + 1 : session.fullscreenExits;
+  const next = { ...session, quizSwitches, fullscreenExits };
+  await storage.setSession(next);
+
+  if (isSwitch || fullscreenExit) {
+    await logEvent({
+      type: fullscreenExit ? "fullscreen_exit" : "quiz_warning",
+      url: event.url,
+      details: { quizSwitches, fullscreenExits, limit: policy.quizWarningLimit }
+    });
+  }
+
+  if (quizSwitches >= policy.quizWarningLimit || fullscreenExits >= policy.quizWarningLimit) {
+    await logEvent({ type: "quiz_locked", url: event.url, details: { action: policy.quizAction } });
+    notify("Quiz Protected", policy.quizAction === "submit" ? "Quiz auto-submit requested." : "Quiz locked after repeated focus exits.");
+  }
+  return next;
+}
+
+async function enableQuizMode(config?: Partial<FocusPolicy>) {
+  const [session, policy] = await Promise.all([storage.getSession(), storage.getPolicy()]);
+  const nextPolicy = { ...policy, ...config, messages: { ...policy.messages, ...config?.messages } };
+  await storage.setPolicy(nextPolicy);
+  const nextSession = session.active ? { ...session, quizMode: true, quizSwitches: 0, fullscreenExits: 0 } : await startFocus({});
+  await storage.setSession({ ...nextSession, quizMode: true });
+  await logEvent({ type: "quiz_started", url: nextSession.sourceUrl });
+  return nextSession;
+}
+
+function notify(title: string, message: string) {
+  storage.getSettings().then((settings) => {
+    if (!settings.notificationsEnabled) return;
+    chrome.notifications.create({
+      type: "basic",
+      iconUrl: "icons/icon-128.png",
+      title,
+      message
+    });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const state = await getState();
+  await storage.setPolicy({ ...DEFAULT_POLICY, ...state.policy, messages: { ...DEFAULT_POLICY.messages, ...state.policy.messages } });
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  const session = await storage.getSession();
+  if (!session.active) return;
+  if (session.endsAt <= Date.now()) {
+    await endFocus("timer_expired_during_shutdown");
+    return;
+  }
+  await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
+  const settings = await storage.getSettings();
+  await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
+});
+
+chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendResponse) => {
+  (async () => {
+    switch (message.type) {
+      case "START_FOCUS":
+        sendResponse({ ok: true, state: await startFocus(message) });
+        break;
+      case "END_FOCUS":
+        await endFocus(message.reason);
+        sendResponse({ ok: true, state: await getState() });
+        break;
+      case "GET_STATE":
+        sendResponse({ ok: true, state: await getState() });
+        break;
+      case "OPEN_FOCUS_PAGE":
+        if (sender.tab?.id) await redirectBlockedTab(sender.tab.id, message.url ?? sender.tab.url ?? "", "external_escape");
+        sendResponse({ ok: true });
+        break;
+      case "QUIZ_STARTED":
+        sendResponse({ ok: true, state: await enableQuizMode(message.config) });
+        break;
+      case "QUIZ_EVENT":
+        sendResponse({ ok: true, state: await handleQuizEvent(message) });
+        break;
+      case "PROGRESS_UPDATE": {
+        const progress = await storage.getProgress();
+        await storage.setProgress({ ...progress, ...message.progress });
+        sendResponse({ ok: true });
+        break;
+      }
+      case "NOTIFY":
+        notify(message.title, message.message);
+        sendResponse({ ok: true });
+        break;
+      case "SAVE_SETTINGS": {
+        const settings = await storage.getSettings();
+        await storage.setSettings({ ...settings, ...message.settings });
+        sendResponse({ ok: true });
+        break;
+      }
+      case "ADMIN_POLICY": {
+        const policy = await storage.getPolicy();
+        await storage.setPolicy({ ...policy, ...message.policy, messages: { ...policy.messages, ...message.policy.messages } });
+        sendResponse({ ok: true });
+        break;
+      }
+    }
+  })().catch((error) => sendResponse({ ok: false, error: String(error) }));
+  return true;
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status === "loading") {
+    maybeBlockNavigation(tabId, changeInfo.url ?? tab.url);
+  }
+
+  const url = changeInfo.url ?? tab.url;
+  if (url && isLikelyLearningPage(url)) {
+    startFocus({ sourceUrl: url }).catch(() => undefined);
+  }
+});
+
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  if (details.frameId === 0) {
+    maybeBlockNavigation(details.tabId, details.url);
+  }
+});
+
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  if (details.frameId !== 0 || !isZvertsUrl(details.url)) return;
+  if (isLikelyLearningPage(details.url)) await startFocus({ sourceUrl: details.url });
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === TIMER_ALARM) {
+    notify("Focus session complete", "Nice work. Your ZverTs study timer is finished.");
+    await endFocus("timer_complete");
+  }
+
+  if (alarm.name === REMINDER_ALARM) {
+    const session = await storage.getSession();
+    if (!session.active) return;
+    notify("Continue your lesson", "Your streak is waiting.");
+    await logEvent({ type: "idle_reminder", url: session.sourceUrl });
+    const settings = await storage.getSettings();
+    await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
+  }
+});
