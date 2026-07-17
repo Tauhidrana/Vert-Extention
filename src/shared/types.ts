@@ -22,6 +22,7 @@ export interface FocusSession {
   startedAt: number;
   endsAt: number;
   durationMinutes: number;
+  youtubeBlockTime: number;
   sourceUrl?: string;
   quizMode: boolean;
   quizPaused: boolean;

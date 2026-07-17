@@ -53,6 +53,7 @@ async function startFocus(input: Partial<FocusSession>) {
     startedAt: now,
     endsAt: now + durationMinutes * 60_000,
     durationMinutes,
+    youtubeBlockTime: now + 5 * 60_000,
     sourceUrl: input.sourceUrl,
     zvertsTabId: input.zvertsTabId
   };
@@ -112,7 +113,10 @@ async function maybeBlockNavigation(tabId: number, url?: string) {
     }
 
     if (isBlockedByPolicy(url, policy.blockedSites, settings.whitelist)) {
-      await redirectBlockedTab(tabId, url);
+      const isYoutube = /(?:^|\.)youtube\.com$/.test(new URL(url).hostname.replace(/^www\./, ""));
+      if (!isYoutube || Date.now() >= session.youtubeBlockTime) {
+        await redirectBlockedTab(tabId, url);
+      }
     }
   } catch {
   }

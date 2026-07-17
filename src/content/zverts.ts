@@ -1,6 +1,8 @@
 import type { LearningContext, RuntimeMessage } from "../shared/types";
 
 const send = <T extends RuntimeMessage>(message: T) => chrome.runtime.sendMessage(message).catch(() => undefined);
+const ask = <T extends RuntimeMessage>(message: T): Promise<Record<string, unknown> | undefined> =>
+  chrome.runtime.sendMessage(message).catch(() => undefined);
 const QUIZ_FLAG = "zvertsQuizMode";
 const QUIZ_PAUSED_FLAG = "zvertsQuizPaused";
 
@@ -166,6 +168,83 @@ function showPauseOverlay(message = "Return to fullscreen to continue.") {
 function hidePauseOverlay() {
   const overlay = document.getElementById("zverts-quiz-pause");
   if (overlay) overlay.style.display = "none";
+}
+
+const YOUTUBE_COUNTDOWN_ID = "zverts-youtube-countdown";
+let youtubeCountdownTimer: number | undefined;
+
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "0:00";
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function removeYoutubeCountdown() {
+  if (youtubeCountdownTimer) {
+    clearInterval(youtubeCountdownTimer);
+    youtubeCountdownTimer = undefined;
+  }
+  document.getElementById(YOUTUBE_COUNTDOWN_ID)?.remove();
+}
+
+function showYoutubeCountdown(youtubeBlockTime: number) {
+  const remaining = youtubeBlockTime - Date.now();
+  if (remaining <= 0) return;
+
+  let badge = document.getElementById(YOUTUBE_COUNTDOWN_ID);
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = YOUTUBE_COUNTDOWN_ID;
+    badge.style.cssText = [
+      "position:fixed",
+      "bottom:20px",
+      "right:20px",
+      "z-index:2147483647",
+      "padding:10px 16px",
+      "border-radius:12px",
+      "background:rgba(18,24,33,.94)",
+      "border:1px solid rgba(239,68,68,.4)",
+      "box-shadow:0 8px 32px rgba(0,0,0,.4)",
+      "color:#fff",
+      "font:600 13px Inter,system-ui,sans-serif",
+      "display:flex",
+      "align-items:center",
+      "gap:8px",
+      "backdrop-filter:blur(12px)",
+      "transition:opacity .3s"
+    ].join(";");
+    badge.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z" fill="#EF4444"/><path d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z" fill="#fff"/></svg><span id="${YOUTUBE_COUNTDOWN_ID}-text"></span>`;
+    document.documentElement.appendChild(badge);
+  }
+
+  const textEl = badge.querySelector(`#${YOUTUBE_COUNTDOWN_ID}-text`) as HTMLSpanElement;
+
+  function update() {
+    const left = youtubeBlockTime - Date.now();
+    if (left <= 0) {
+      removeYoutubeCountdown();
+      return;
+    }
+    textEl.textContent = `YouTube blocked in ${formatCountdown(left)}`;
+  }
+
+  update();
+  if (youtubeCountdownTimer) clearInterval(youtubeCountdownTimer);
+  youtubeCountdownTimer = window.setInterval(update, 1000);
+}
+
+async function initYoutubeCountdown(retries = 3) {
+  const res = await ask({ type: "GET_STATE" } as RuntimeMessage);
+  if (!res?.ok) return;
+  const state = res.state as { session?: { active?: boolean; youtubeBlockTime?: number } } | undefined;
+  const session = state?.session;
+  if (!session?.active || !session.youtubeBlockTime) {
+    if (retries > 0) setTimeout(() => initYoutubeCountdown(retries - 1), 1000);
+    return;
+  }
+  showYoutubeCountdown(session.youtubeBlockTime);
 }
 
 function isQuizMode() {
@@ -404,6 +483,7 @@ listenForZvertsAppEvents();
 chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
   if (message.type === "REQUEST_LEARNING_SESSION_SYNC") {
     requestActiveLearningSession();
+    initYoutubeCountdown();
   }
   if (message.type === "QUIZ_EVENT_FROM_EXTENSION") {
     reportToWebsite("ZVERTS_FOCUS_QUIZ_EVENT", message.payload as Record<string, unknown>);
@@ -430,8 +510,10 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {
     startFocusIfNeeded();
     detectQuizStart();
+    setTimeout(initYoutubeCountdown, 500);
   });
 } else {
   startFocusIfNeeded();
   detectQuizStart();
+  setTimeout(initYoutubeCountdown, 500);
 }

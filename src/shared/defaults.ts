@@ -40,6 +40,7 @@ export const EMPTY_SESSION: FocusSession = {
   startedAt: 0,
   endsAt: 0,
   durationMinutes: 0,
+  youtubeBlockTime: 0,
   quizMode: false,
   quizPaused: false,
   quizSwitches: 0,
