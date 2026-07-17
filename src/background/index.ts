@@ -6,6 +6,7 @@ import { focusPageUrl, isAiBlockedByPolicy, isBlockedByPolicy, isLikelyLearningP
 
 const TIMER_ALARM = "zverts-focus-timer";
 const REMINDER_ALARM = "zverts-study-reminder";
+const YOUTUBE_BLOCK_ALARM = "zverts-youtube-block";
 
 async function logEvent(event: Omit<FocusEvent, "id" | "at"> & { at?: number }) {
   await storage.addEvent(event);
@@ -61,6 +62,7 @@ async function startFocus(input: Partial<FocusSession>) {
   await storage.setSession(session);
   await setAdRulesEnabled(true);
   await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
+  await chrome.alarms.create(YOUTUBE_BLOCK_ALARM, { when: session.youtubeBlockTime });
   await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
   await logEvent({ type: "focus_started", url: input.sourceUrl, details: { durationMinutes } });
   return session;
@@ -77,6 +79,7 @@ async function endFocus(reason = "manual") {
   });
   await setAdRulesEnabled(false);
   await chrome.alarms.clear(TIMER_ALARM);
+  await chrome.alarms.clear(YOUTUBE_BLOCK_ALARM);
   await chrome.alarms.clear(REMINDER_ALARM);
   if (reason === "zverts_tab_closed" || reason === "auto_start_disabled") {
     await storage.setLearningContext(DEFAULT_LEARNING_CONTEXT);
@@ -284,6 +287,9 @@ chrome.runtime.onStartup.addListener(async () => {
     return;
   }
   await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
+  if (session.youtubeBlockTime > Date.now()) {
+    await chrome.alarms.create(YOUTUBE_BLOCK_ALARM, { when: session.youtubeBlockTime });
+  }
   const settings = await storage.getSettings();
   await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
 });
@@ -398,6 +404,17 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === TIMER_ALARM) {
     notify("Focus session complete", "Nice work. Your ZverTs study timer is finished.");
     await endFocus("timer_complete");
+  }
+
+  if (alarm.name === YOUTUBE_BLOCK_ALARM) {
+    const session = await storage.getSession();
+    if (!session.active) return;
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id && tab.url && /(?:^|\.)youtube\.com$/.test(new URL(tab.url).hostname.replace(/^www\./, ""))) {
+        await redirectBlockedTab(tab.id, tab.url, "youtube_timeout");
+      }
+    }
   }
 
   if (alarm.name === REMINDER_ALARM) {
