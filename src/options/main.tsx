@@ -1,8 +1,18 @@
 import "../styles/global.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bell, Clock, Save, ShieldCheck, Volume2, Wand2 } from "lucide-react";
-import { Button, Card, GhostButton, Input, Logo } from "../shared/ui";
+import {
+  Bell,
+  Clock,
+  Globe,
+  Save,
+  Shield,
+  ShieldCheck,
+  Volume2,
+  Wand2,
+  Check
+} from "lucide-react";
+import { Button, Card, CardHeader, GhostButton, Input, Logo } from "../shared/ui";
 import type { UserSettings } from "../shared/types";
 
 interface State {
@@ -16,11 +26,28 @@ function linesToList(value: string) {
     .filter(Boolean);
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function Toggle({ label, description, checked, onChange }: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
   return (
-    <label className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.04] p-3 text-sm font-semibold text-white/75">
-      {label}
-      <input type="checkbox" className="h-5 w-5 accent-zgreen" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    <label className="flex items-center justify-between gap-4 rounded-xl border border-white/[0.06] bg-white/[0.03] p-4 transition-all duration-200 hover:bg-white/[0.05] cursor-pointer">
+      <div>
+        <div className="text-sm font-semibold text-white/85">{label}</div>
+        {description && <div className="mt-0.5 text-[11px] text-white/40">{description}</div>}
+      </div>
+      <div className="relative flex-shrink-0">
+        <input
+          type="checkbox"
+          className="peer sr-only"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <div className="h-6 w-11 rounded-full bg-white/10 transition-colors duration-200 peer-checked:bg-zgreen/80" />
+        <div className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 peer-checked:translate-x-5 peer-checked:bg-zbg" />
+      </div>
     </label>
   );
 }
@@ -35,79 +62,102 @@ function Options() {
     });
   }, []);
 
-  if (!state) return <div className="grid min-h-screen place-items-center text-white/70">Loading settings...</div>;
+  if (!state) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <div className="text-center">
+          <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-zgreen/30 border-t-zgreen" />
+          <div className="text-sm text-white/50">Loading settings...</div>
+        </div>
+      </div>
+    );
+  }
 
-  const updateSettings = (settings: Partial<UserSettings>) => setState((prev) => prev && { ...prev, settings: { ...prev.settings, ...settings } });
+  const updateSettings = (settings: Partial<UserSettings>) =>
+    setState((prev) => prev && { ...prev, settings: { ...prev.settings, ...settings } });
 
   const save = async () => {
     await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", settings: state.settings });
     setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
+    window.setTimeout(() => setSaved(false), 2000);
   };
 
   return (
     <main className="min-h-screen px-5 py-8">
-      <section className="mx-auto max-w-3xl">
-        <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <section className="mx-auto max-w-2xl animate-fade-in">
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
           <Logo />
           <Button onClick={save}>
-            <Save size={16} /> {saved ? "Saved" : "Save Settings"}
+            {saved ? <Check size={16} /> : <Save size={16} />}
+            {saved ? "Saved" : "Save Settings"}
           </Button>
         </header>
 
         <div className="grid gap-4">
           <Card>
-            <div className="mb-4 flex items-center gap-2">
-              <ShieldCheck className="text-zgreen" size={18} />
-              <h2 className="m-0 text-lg font-black">Allowed Sites</h2>
-            </div>
+            <CardHeader icon={Globe} title="Allowed Sites" />
             <textarea
-              className="focus-ring min-h-32 w-full rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-white"
+              className="focus-ring min-h-36 w-full rounded-xl border border-white/[0.06] bg-black/30 p-4 text-sm text-white placeholder:text-white/25 transition-colors duration-200 focus:border-zgreen/50 focus:bg-black/40"
               value={state.settings.whitelist.join("\n")}
               onChange={(event) => updateSettings({ whitelist: linesToList(event.target.value) })}
+              placeholder="zverts.com&#10;google.com"
             />
-            <p className="m-0 mt-2 text-xs leading-5 text-white/45">Focus protection never blocks these domains. Keep ZverTs here.</p>
+            <p className="m-0 mt-2.5 text-[11px] leading-relaxed text-white/35">
+              Focus protection never blocks these domains. Keep ZverTs here.
+            </p>
           </Card>
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
-              <div className="mb-4 flex items-center gap-2">
-                <Clock className="text-zgreen" size={18} />
-                <h2 className="m-0 text-lg font-black">Focus Duration</h2>
-              </div>
+              <CardHeader icon={Clock} title="Focus Duration" />
               <Input
                 type="number"
                 min={5}
                 value={state.settings.pomodoroMinutes}
                 onChange={(event) => updateSettings({ pomodoroMinutes: Number(event.target.value) })}
               />
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-2">
                 {[25, 45, 60, 90].map((minutes) => (
-                  <GhostButton key={minutes} onClick={() => updateSettings({ pomodoroMinutes: minutes })}>{minutes}m</GhostButton>
+                  <GhostButton
+                    key={minutes}
+                    onClick={() => updateSettings({ pomodoroMinutes: minutes })}
+                    className={state.settings.pomodoroMinutes === minutes ? "!border-zgreen/50 !bg-zgreen/15 !text-zgreen" : ""}
+                  >
+                    {minutes}m
+                  </GhostButton>
                 ))}
               </div>
             </Card>
 
             <Card>
-              <div className="mb-4 flex items-center gap-2">
-                <Wand2 className="text-zgreen" size={18} />
-                <h2 className="m-0 text-lg font-black">Automation</h2>
-              </div>
-              <div className="grid gap-3">
-                <Toggle label="Auto Start Focus" checked={state.settings.autoStartFocus} onChange={(autoStartFocus) => updateSettings({ autoStartFocus })} />
-                <Toggle label="Notifications" checked={state.settings.notificationsEnabled} onChange={(notificationsEnabled) => updateSettings({ notificationsEnabled })} />
-                <Toggle label="Sound" checked={state.settings.soundEnabled} onChange={(soundEnabled) => updateSettings({ soundEnabled })} />
+              <CardHeader icon={Wand2} title="Automation" />
+              <div className="grid gap-2.5">
+                <Toggle
+                  label="Auto Start Focus"
+                  description="Start blocking when ZverTs opens"
+                  checked={state.settings.autoStartFocus}
+                  onChange={(autoStartFocus) => updateSettings({ autoStartFocus })}
+                />
+                <Toggle
+                  label="Notifications"
+                  description="Show focus reminders"
+                  checked={state.settings.notificationsEnabled}
+                  onChange={(notificationsEnabled) => updateSettings({ notificationsEnabled })}
+                />
+                <Toggle
+                  label="Sound"
+                  description="Play notification sounds"
+                  checked={state.settings.soundEnabled}
+                  onChange={(soundEnabled) => updateSettings({ soundEnabled })}
+                />
               </div>
             </Card>
           </div>
 
           <Card>
-            <div className="mb-4 flex items-center gap-2">
-              <Bell className="text-zgreen" size={18} />
-              <h2 className="m-0 text-lg font-black">Connection</h2>
-            </div>
+            <CardHeader icon={Shield} title="Connection" />
             <div className="grid gap-3 md:grid-cols-2">
-              <label className="block text-sm text-white/70">
+              <label className="block text-sm text-white/60">
                 Supabase URL
                 <Input
                   className="mt-2"
@@ -116,12 +166,12 @@ function Options() {
                   onChange={(event) => updateSettings({ supabaseUrl: event.target.value })}
                 />
               </label>
-              <label className="block text-sm text-white/70">
-                JWT
+              <label className="block text-sm text-white/60">
+                JWT Token
                 <Input
                   className="mt-2"
                   type="password"
-                  placeholder="Stored locally; no service keys"
+                  placeholder="Stored locally only"
                   value={state.settings.jwt ?? ""}
                   onChange={(event) => updateSettings({ jwt: event.target.value })}
                 />
