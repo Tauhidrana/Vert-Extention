@@ -2,13 +2,9 @@ import "../styles/global.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Bell,
   Clock,
   Globe,
   Save,
-  Shield,
-  ShieldCheck,
-  Volume2,
   Wand2,
   Check
 } from "lucide-react";
@@ -154,30 +150,6 @@ function Options() {
             </Card>
           </div>
 
-          <Card>
-            <CardHeader icon={Shield} title="Connection" />
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="block text-sm text-white/60">
-                Supabase URL
-                <Input
-                  className="mt-2"
-                  placeholder="https://project.supabase.co"
-                  value={state.settings.supabaseUrl ?? ""}
-                  onChange={(event) => updateSettings({ supabaseUrl: event.target.value })}
-                />
-              </label>
-              <label className="block text-sm text-white/60">
-                JWT Token
-                <Input
-                  className="mt-2"
-                  type="password"
-                  placeholder="Stored locally only"
-                  value={state.settings.jwt ?? ""}
-                  onChange={(event) => updateSettings({ jwt: event.target.value })}
-                />
-              </label>
-            </div>
-          </Card>
         </div>
       </section>
     </main>
