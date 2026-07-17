@@ -483,7 +483,6 @@ listenForZvertsAppEvents();
 chrome.runtime.onMessage.addListener((message: RuntimeMessage) => {
   if (message.type === "REQUEST_LEARNING_SESSION_SYNC") {
     requestActiveLearningSession();
-    initYoutubeCountdown();
   }
   if (message.type === "QUIZ_EVENT_FROM_EXTENSION") {
     reportToWebsite("ZVERTS_FOCUS_QUIZ_EVENT", message.payload as Record<string, unknown>);
