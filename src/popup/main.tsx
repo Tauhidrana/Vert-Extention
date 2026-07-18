@@ -1,9 +1,8 @@
 import "../styles/global.css";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BookOpen,
-  Clock3,
   Gem,
   Flame,
   Sparkles,
@@ -13,7 +12,8 @@ import {
   Zap,
   Trophy
 } from "lucide-react";
-import { Card, CardHeader, Divider, GhostButton, Logo, ProgressBar, Stat, StatusDot } from "../shared/ui";
+import { Card, CardHeader, Logo, ProgressBar, Stat, StatusDot } from "../shared/ui";
+import { cn } from "../shared/cn";
 import type { FocusEvent, FocusPolicy, FocusSession, LearningContext, UserSettings } from "../shared/types";
 
 interface State {
@@ -98,10 +98,6 @@ function ProtectionBadge({ label, active, icon: Icon }: { label: string; active:
   );
 }
 
-function cn(...classes: (string | boolean | undefined)[]) {
-  return classes.filter(Boolean).join(" ");
-}
-
 function Popup() {
   const [state, setState] = useState<State | null>(null);
   const [, tick] = useState(0);
@@ -121,7 +117,7 @@ function Popup() {
     };
   }, []);
 
-  const remaining = useMemo(() => (state ? formatRemaining(state.session.endsAt, state.session.active) : "--:--"), [state, state?.session.endsAt]);
+  const remaining = state ? formatRemaining(state.session.endsAt, state.session.active) : "--:--";
   const progress = state ? timerProgress(state.session) : 0;
 
   if (!state) {

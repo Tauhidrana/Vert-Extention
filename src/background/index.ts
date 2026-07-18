@@ -8,6 +8,8 @@ const TIMER_ALARM = "zverts-focus-timer";
 const REMINDER_ALARM = "zverts-study-reminder";
 const YOUTUBE_BLOCK_ALARM = "zverts-youtube-block";
 
+let focusLock: Promise<unknown> = Promise.resolve();
+
 async function logEvent(event: Omit<FocusEvent, "id" | "at"> & { at?: number }) {
   await storage.addEvent(event);
   const events = await storage.getEvents();
@@ -32,50 +34,56 @@ async function getState() {
 }
 
 async function startFocus(input: Partial<FocusSession>) {
-  const policy = await storage.getPolicy();
-  const settings = await storage.getSettings();
-  const existing = await storage.getSession();
-  if (existing.active && existing.endsAt > Date.now() && input.durationMinutes === undefined) {
-    const refreshed = {
-      ...existing,
-      sourceUrl: input.sourceUrl ?? existing.sourceUrl,
-      zvertsTabId: input.zvertsTabId ?? existing.zvertsTabId
-    };
-    await storage.setSession(refreshed);
-    await setAdRulesEnabled(true);
-    return refreshed;
-  }
+  // Serialize startFocus calls to prevent race conditions
+  const result = await new Promise<FocusSession>((resolve) => {
+    focusLock = focusLock.then(async () => {
+      const policy = await storage.getPolicy();
+      const settings = await storage.getSettings();
+      const existing = await storage.getSession();
+      if (existing.active && existing.endsAt > Date.now() && input.durationMinutes === undefined) {
+        const refreshed = {
+          ...existing,
+          sourceUrl: input.sourceUrl ?? existing.sourceUrl,
+          zvertsTabId: input.zvertsTabId ?? existing.zvertsTabId
+        };
+        await storage.setSession(refreshed);
+        await setAdRulesEnabled(true);
+        resolve(refreshed);
+        return;
+      }
 
-  const durationMinutes = input.durationMinutes ?? settings.pomodoroMinutes ?? policy.defaultTimerMinutes;
-  const now = Date.now();
-  const session: FocusSession = {
-    ...EMPTY_SESSION,
-    active: true,
-    startedAt: now,
-    endsAt: now + durationMinutes * 60_000,
-    durationMinutes,
-    youtubeBlockTime: now + 5 * 60_000,
-    sourceUrl: input.sourceUrl,
-    zvertsTabId: input.zvertsTabId
-  };
+      const durationMinutes = input.durationMinutes ?? settings.pomodoroMinutes ?? policy.defaultTimerMinutes;
+      const now = Date.now();
+      const session: FocusSession = {
+        ...EMPTY_SESSION,
+        active: true,
+        startedAt: now,
+        endsAt: now + durationMinutes * 60_000,
+        durationMinutes,
+        youtubeBlockTime: now + 5 * 60_000,
+        sourceUrl: input.sourceUrl,
+        zvertsTabId: input.zvertsTabId
+      };
 
-  await storage.setSession(session);
-  await setAdRulesEnabled(true);
-  await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
-  await chrome.alarms.create(YOUTUBE_BLOCK_ALARM, { when: session.youtubeBlockTime });
-  await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
-  await logEvent({ type: "focus_started", url: input.sourceUrl, details: { durationMinutes } });
-  return session;
+      await storage.setSession(session);
+      await setAdRulesEnabled(true);
+      await chrome.alarms.create(TIMER_ALARM, { when: session.endsAt });
+      await chrome.alarms.create(YOUTUBE_BLOCK_ALARM, { when: session.youtubeBlockTime });
+      await chrome.alarms.create(REMINDER_ALARM, { delayInMinutes: Math.max(1, settings.studyReminderMinutes) });
+      await logEvent({ type: "focus_started", url: input.sourceUrl, details: { durationMinutes } });
+      resolve(session);
+    });
+  });
+  return result;
 }
 
 async function endFocus(reason = "manual") {
   const previous = await storage.getSession();
-  const preserveStoppedTab = reason === "timer_complete" || reason === "user_disabled";
   await storage.setSession({
     ...EMPTY_SESSION,
-    startedAt: preserveStoppedTab ? Date.now() : 0,
-    sourceUrl: preserveStoppedTab ? previous.sourceUrl : undefined,
-    zvertsTabId: preserveStoppedTab ? previous.zvertsTabId : undefined
+    startedAt: 0,
+    sourceUrl: undefined,
+    zvertsTabId: undefined
   });
   await setAdRulesEnabled(false);
   await chrome.alarms.clear(TIMER_ALARM);
@@ -220,7 +228,7 @@ async function setAdRulesEnabled(enabled: boolean) {
 }
 
 async function findZvertsTab() {
-  const tabs = await chrome.tabs.query({});
+  const tabs = await chrome.tabs.query({ url: ["https://*.zverts.com/*", "https://zverts.com/*"] });
   return tabs.find((tab) => isZvertsUrl(tab.url));
 }
 
@@ -353,6 +361,9 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
       case "QUIZ_EVENT_FROM_EXTENSION":
         sendResponse({ ok: true });
         break;
+      default:
+        sendResponse({ ok: true });
+        break;
     }
   })().catch((error) => sendResponse({ ok: false, error: String(error) }));
   return true;
@@ -377,9 +388,12 @@ chrome.tabs.onRemoved.addListener(() => {
   syncFocusWithZvertsTabs().catch(() => undefined);
 });
 
-chrome.tabs.onActivated.addListener(() => {
+chrome.tabs.onActivated.addListener(async () => {
   syncFocusWithZvertsTabs().catch(() => undefined);
-  handleQuizEvent({ type: "QUIZ_EVENT", event: "switch", details: { source: "tabs.onActivated" } }).catch(() => undefined);
+  const session = await storage.getSession().catch(() => null);
+  if (session?.active && session.quizMode) {
+    handleQuizEvent({ type: "QUIZ_EVENT", event: "switch", details: { source: "tabs.onActivated" } }).catch(() => undefined);
+  }
 });
 
 chrome.windows.onFocusChanged.addListener((windowId) => {

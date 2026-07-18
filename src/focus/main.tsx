@@ -1,7 +1,7 @@
 import "../styles/global.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, ShieldCheck, Lock, Bot } from "lucide-react";
+import { ArrowRight, ShieldCheck, Bot } from "lucide-react";
 import { Button, Logo } from "../shared/ui";
 
 function FocusPage() {
